@@ -69,3 +69,31 @@ class ErrorDetail(BaseModel):
 
     code: str = Field(description="エラーコード")
     message: str = Field(description="ユーザー向けエラーメッセージ")
+
+
+class SourceRegion(BaseModel):
+    """抽出値の根拠となる PDF 上の領域。"""
+
+    source_id: str
+    page_number: int = Field(ge=1)
+    text: str
+    polygon: list[float] = Field(
+        min_length=8,
+        max_length=8,
+        description="ページ幅・高さで 0〜1 に正規化した四角形",
+    )
+
+
+class ExtractedField(BaseModel):
+    """決算短信から抽出した項目と根拠。"""
+
+    name: str
+    label: str
+    value: str | None
+    sources: list[SourceRegion] = Field(default_factory=list)
+
+
+class FinancialSummaryResponse(BaseModel):
+    """決算短信の項目抽出レスポンス。"""
+
+    fields: list[ExtractedField]

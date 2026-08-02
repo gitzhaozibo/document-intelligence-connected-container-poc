@@ -1,13 +1,83 @@
 """Document Intelligence PoC の Streamlit 画面。"""
 
 import os
+from hashlib import sha256
 from typing import Any
 
+import fitz
 import streamlit as st
 
 from frontend.api_client import ApiError, DocumentApiClient
 
 ACCEPTED_FILE_TYPES = ["pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "heif"]
+
+
+def _render_pdf_page(
+    content: bytes, page_number: int, sources: list[dict[str, Any]]
+) -> bytes:
+    """指定ページを根拠領域付きの PNG に変換します。"""
+    with fitz.open(stream=content, filetype="pdf") as document:
+        page = document[page_number - 1]
+        for source in sources:
+            if source.get("page_number") != page_number:
+                continue
+            polygon = source.get("polygon") or []
+            if len(polygon) != 8:
+                continue
+            xs = polygon[0::2]
+            ys = polygon[1::2]
+            rect = fitz.Rect(
+                min(xs) * page.rect.width,
+                min(ys) * page.rect.height,
+                max(xs) * page.rect.width,
+                max(ys) * page.rect.height,
+            )
+            annotation = page.add_rect_annot(rect)
+            annotation.set_colors(stroke=(1, 0.55, 0), fill=(1, 0.85, 0))
+            annotation.set_opacity(0.35)
+            annotation.update()
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+        return pixmap.tobytes("png")
+
+
+def _display_financial_summary(
+    result: dict[str, Any], pdf_content: bytes
+) -> None:
+    fields = result.get("fields") or []
+    st.success("決算短信から情報を抽出しました。")
+    st.subheader("抽出結果")
+    st.dataframe(
+        [
+            {
+                "項目": field.get("label", ""),
+                "値": field.get("value") or "（未検出）",
+                "元情報": " / ".join(
+                    source.get("text", "") for source in field.get("sources") or []
+                ),
+            }
+            for field in fields
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    field_options = {
+        field.get("label", field.get("name", "")): field for field in fields
+    }
+    selected_label = st.selectbox("PDF 上で確認する項目", options=list(field_options))
+    selected = field_options[selected_label]
+    sources = selected.get("sources") or []
+    if sources:
+        st.caption("元情報: " + " / ".join(source["text"] for source in sources))
+        source_pages = sorted({int(source["page_number"]) for source in sources})
+        page_number = st.selectbox("根拠ページ", options=source_pages)
+        st.image(
+            _render_pdf_page(pdf_content, page_number, sources),
+            caption=f"{page_number} ページ（オレンジ色が元情報の位置）",
+            use_container_width=True,
+        )
+    else:
+        st.info("この項目の元情報は特定できませんでした。")
 
 
 def _display_result(result: dict[str, Any]) -> None:
@@ -36,6 +106,51 @@ def run_app() -> None:
         type=ACCEPTED_FILE_TYPES,
         help="PDF、JPEG、PNG、TIFF、BMP、HEIF（最大サイズは FastAPI の設定に従います）",
     )
+
+    if uploaded_file is not None and uploaded_file.type == "application/pdf":
+        pdf_content = uploaded_file.getvalue()
+        document_id = sha256(pdf_content).hexdigest()
+        if st.session_state.get("summary_document_id") != document_id:
+            st.session_state.pop("summary_result", None)
+        st.subheader("アップロード PDF")
+        try:
+            with fitz.open(stream=pdf_content, filetype="pdf") as document:
+                preview_page = st.number_input(
+                    "表示ページ",
+                    min_value=1,
+                    max_value=document.page_count,
+                    value=1,
+                    step=1,
+                )
+            st.image(
+                _render_pdf_page(pdf_content, int(preview_page), []),
+                use_container_width=True,
+            )
+        except (fitz.FileDataError, ValueError):
+            st.error("PDF を表示できません。ファイルが破損していないか確認してください。")
+
+        if st.button("決算短信の情報を抽出", type="primary"):
+            api_url = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
+            client = DocumentApiClient(api_url)
+            with st.spinner("OCR と Azure GPT で会社名・コード・決算期を抽出しています..."):
+                try:
+                    summary = client.extract_financial_summary(
+                        filename=uploaded_file.name,
+                        content=pdf_content,
+                        content_type=uploaded_file.type,
+                    )
+                except ApiError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state["summary_result"] = summary
+                    st.session_state["summary_document_id"] = document_id
+
+        summary_result = st.session_state.get("summary_result")
+        if (
+            summary_result
+            and st.session_state.get("summary_document_id") == document_id
+        ):
+            _display_financial_summary(summary_result, pdf_content)
 
     with st.expander("ページ・解析オプション", expanded=True):
         pages = st.text_input(
