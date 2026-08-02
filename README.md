@@ -754,3 +754,11 @@ streamlit run frontend/app.py
 このプロジェクトは MIT ライセンスの下で公開されています。
 
 Azure AI Document Intelligence の利用については、[Microsoft のサービス利用規約](https://www.microsoft.com/licensing/terms)に従ってください。
+# 決算短信の情報抽出
+
+Streamlit 画面では、アップロードした PDF のプレビューに加えて、Azure OpenAI を
+利用した会社名・証券コード・決算期の抽出を実行できます。抽出結果には OCR 行の
+元情報が表示され、選択した項目の根拠位置が PDF 上でオレンジ色にマークされます。
+
+利用する場合は `.env` に `AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_KEY`、
+`AZURE_OPENAI_DEPLOYMENT` を設定してください。
