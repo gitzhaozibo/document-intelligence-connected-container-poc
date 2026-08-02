@@ -37,3 +37,18 @@ def test_extract_financial_summary_posts_pdf(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     assert result == {"fields": []}
+
+
+def test_download_financial_summary_excel(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = httpx.Request("GET", "http://api/api/v1/financial-summary/document-id/excel")
+    response = httpx.Response(200, request=request, content=b"xlsx")
+
+    def fake_get(*args: object, **kwargs: object) -> httpx.Response:
+        assert args[0] == "http://api/api/v1/financial-summary/document-id/excel"
+        return response
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    assert (
+        DocumentApiClient("http://api").download_financial_summary_excel("document-id") == b"xlsx"
+    )

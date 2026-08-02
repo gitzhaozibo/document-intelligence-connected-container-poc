@@ -762,3 +762,43 @@ Streamlit 画面では、アップロードした PDF のプレビューに加�
 
 利用する場合は `.env` に `AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_KEY`、
 `AZURE_OPENAI_DEPLOYMENT` を設定してください。
+
+## PostgreSQL、キャッシュ、Excel 出力
+
+決算短信 PDF と解析結果は PostgreSQL に保存されます。PDF 内容の SHA-256 と
+`ANALYSIS_PROCESSING_VERSION` が同じ成功済み結果は、OCR と Azure OpenAI を再実行せず
+DB から返します。処理バージョンを変更すると、同じ PDF を新しい抽出仕様で再解析できます。
+
+保存対象は次のとおりです。
+
+- PDF 本体、元ファイル名、MIME タイプ、サイズ、SHA-256
+- OCR 全文・JSON、会社名、証券コード、決算期、根拠位置
+- 処理状態、operation ID、キャッシュ利用、処理時間、失敗情報
+
+抽出結果画面の「Excelを作成」から、PDF名・会社名・コード名（証券コード）・決算期を
+一行にした `.xlsx` をダウンロードできます。
+
+### DB の起動とマイグレーション
+
+`.env.example` をコピーし、`POSTGRES_PASSWORD` を強固な値へ変更してください。
+`docker compose up -d` では PostgreSQL の正常起動後に
+FastAPI が Alembic のマイグレーションを自動適用します。手動適用する場合は次を実行します。
+
+```powershell
+docker compose run --rm fastapi alembic upgrade head
+```
+
+### バックアップと復元
+
+```powershell
+# バックアップ
+docker compose exec postgres pg_dump -U postgres -d document_app -Fc -f /tmp/document_app.dump
+docker compose cp postgres:/tmp/document_app.dump ./document_app.dump
+
+# 復元（対象 DB の内容を置き換えるため、事前に確認してください）
+docker compose cp ./document_app.dump postgres:/tmp/document_app.dump
+docker compose exec postgres pg_restore -U postgres -d document_app --clean --if-exists /tmp/document_app.dump
+```
+
+PDF と OCR 全文を保存するため、本番利用前にアクセス制御、保存期間、削除、暗号化、
+バックアップ保護の方針を定めてください。通常のアプリログには PDF・OCR 本文を出力しません。

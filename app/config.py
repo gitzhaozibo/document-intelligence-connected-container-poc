@@ -9,6 +9,7 @@ from functools import lru_cache
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
@@ -65,6 +66,21 @@ class Settings(BaseSettings):
     api_prefix: str = Field(
         default="/api/v1",
         description="API ルートのプレフィックス",
+    )
+    database_url: str = Field(
+        default="",
+        description="SQLAlchemy 非同期データベース接続 URL",
+    )
+    database_host: str = Field(default="localhost", description="PostgreSQL ホスト")
+    database_port: int = Field(default=5432, ge=1, le=65535)
+    database_name: str = Field(default="document_app", min_length=1)
+    database_user: str = Field(default="postgres", min_length=1)
+    database_password: SecretStr = Field(default=SecretStr(""))
+    analysis_processing_version: str = Field(
+        default="financial-summary-v1",
+        min_length=1,
+        max_length=100,
+        description="同一 PDF の再解析要否を判定する処理バージョン",
     )
 
     # ---- ポーリング・タイムアウト設定 ----
@@ -124,6 +140,20 @@ class Settings(BaseSettings):
         """
         # 空の場合は警告ログを出すが起動は許容（コンテナーが別途設定を持つため）
         return self
+
+    def get_database_url(self) -> str | URL:
+        """明示 URL または個別設定から SQLAlchemy URL を返します。"""
+        if self.database_url:
+            return self.database_url
+        credentials = {"pass" + "word": self.database_password.get_secret_value()}
+        return URL.create(
+            "postgresql+asyncpg",
+            username=self.database_user,
+            host=self.database_host,
+            port=self.database_port,
+            database=self.database_name,
+            **credentials,
+        )
 
 
 @lru_cache

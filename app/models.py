@@ -96,4 +96,6 @@ class ExtractedField(BaseModel):
 class FinancialSummaryResponse(BaseModel):
     """決算短信の項目抽出レスポンス。"""
 
+    document_id: str
+    cache_hit: bool
     fields: list[ExtractedField]

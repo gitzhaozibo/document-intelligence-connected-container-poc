@@ -4,16 +4,19 @@
 Azure や実際の Read コンテナーへの接続を必要としません。
 """
 
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
-import respx
-from httpx import ASGITransport, AsyncClient, Response
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.client import DocumentIntelligenceClient
 from app.config import Settings
+from app.database import Base
 from app.main import create_app
+from app.repository import AnalysisRepository
 
 
 @pytest.fixture
@@ -33,11 +36,31 @@ def test_settings() -> Settings:
         httpx_read_timeout=10.0,
         httpx_write_timeout=10.0,
         httpx_pool_timeout=5.0,
+        database_url="sqlite+aiosqlite:///:memory:",
+        azure_openai_endpoint="https://example.openai.azure.com",
+        azure_openai_api_key="test-key",
+        azure_openai_deployment="gpt-test",
     )
 
 
 @pytest_asyncio.fixture
-async def async_client(test_settings: Settings) -> AsyncGenerator[AsyncClient, None]:
+async def db_session_factory(
+    test_settings: Settings,
+    tmp_path: Path,
+) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    """テストごとに空の SQLite データベースを作成します。"""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    yield async_sessionmaker(engine, expire_on_commit=False)
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def async_client(
+    test_settings: Settings,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[AsyncClient, None]:
     """
     テスト用 FastAPI AsyncClient。
 
@@ -52,10 +75,9 @@ async def async_client(test_settings: Settings) -> AsyncGenerator[AsyncClient, N
     await di_client.start()
     app.state.di_client = di_client
     app.state.settings = test_settings
+    app.state.analysis_repository = AnalysisRepository(db_session_factory)
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
     await di_client.stop()

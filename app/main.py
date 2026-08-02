@@ -11,12 +11,15 @@ Azure Document Intelligence Read Connected Container への
   GET    {prefix}/health            — FastAPI + コンテナーのヘルス状態を返す
 """
 
-import asyncio
 import logging
 import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from hashlib import sha256
+from io import BytesIO
+from time import perf_counter
 from typing import Annotated, Any
+from uuid import UUID
 
 import httpx
 from fastapi import (
@@ -29,10 +32,12 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 
 from app.client import DocumentIntelligenceClient, lifespan_client
 from app.config import Settings, get_settings
+from app.database import create_database
+from app.excel import build_financial_summary_excel
 from app.extraction import FinancialSummaryExtractor, build_source_regions
 from app.models import (
     ContainerHealth,
@@ -44,6 +49,7 @@ from app.models import (
     JobStatusResponse,
     JobSubmitResponse,
 )
+from app.repository import AnalysisRepository
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +94,7 @@ def build_analyze_options(
         for page_range in normalized_pages.split(","):
             bounds = [int(value) for value in page_range.split("-")]
             if len(bounds) == 2 and bounds[0] > bounds[1]:
-                raise ValueError(
-                    "ページ範囲の開始ページは終了ページ以下にしてください。"
-                )
+                raise ValueError("ページ範囲の開始ページは終了ページ以下にしてください。")
         options["pages"] = normalized_pages
 
     normalized_locale = (locale or "").strip()
@@ -114,15 +118,9 @@ def build_analyze_options(
 
 
 def get_analyze_options(
-    pages: Annotated[
-        str | None, Form(description="処理対象ページ（例: 1-3,5）")
-    ] = None,
-    locale: Annotated[
-        str | None, Form(description="ドキュメントのロケール（例: ja-JP）")
-    ] = None,
-    features: Annotated[
-        str | None, Form(description="追加機能（カンマ区切り）")
-    ] = None,
+    pages: Annotated[str | None, Form(description="処理対象ページ（例: 1-3,5）")] = None,
+    locale: Annotated[str | None, Form(description="ドキュメントのロケール（例: ja-JP）")] = None,
+    features: Annotated[str | None, Form(description="追加機能（カンマ区切り）")] = None,
     output_content_format: Annotated[
         str, Form(description="本文形式: text または markdown")
     ] = "text",
@@ -148,23 +146,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 設定の簡易バリデーション
         if not settings.di_billing_endpoint:
             logger.warning(
-                "DI_BILLING_ENDPOINT が設定されていません。"
-                ".env ファイルを確認してください。"
+                "DI_BILLING_ENDPOINT が設定されていません。.env ファイルを確認してください。"
             )
         if not settings.di_api_key:
-            logger.warning(
-                "DI_API_KEY が設定されていません。" ".env ファイルを確認してください。"
-            )
+            logger.warning("DI_API_KEY が設定されていません。.env ファイルを確認してください。")
 
+        database_engine, session_factory = create_database(settings.get_database_url())
         async with lifespan_client(settings) as di_client:
             app.state.di_client = di_client
             app.state.settings = settings
+            app.state.analysis_repository = AnalysisRepository(session_factory)
             logger.info(
                 "アプリケーションを起動しました。prefix=%s, container=%s",
                 settings.api_prefix,
                 settings.di_container_endpoint,
             )
             yield
+        await database_engine.dispose()
         logger.info("アプリケーションを終了しました。")
 
     app = FastAPI(
@@ -184,6 +182,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def get_app_settings(request: Request) -> Settings:
         return request.app.state.settings
+
+    def get_analysis_repository(request: Request) -> AnalysisRepository:
+        return request.app.state.analysis_repository
 
     # ---- ヘルスチェックエンドポイント ----
 
@@ -210,9 +211,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             message=container_health.get("message"),
         )
 
-        overall_status = (
-            HealthStatus.OK if container.reachable else HealthStatus.DEGRADED
-        )
+        overall_status = HealthStatus.OK if container.reachable else HealthStatus.DEGRADED
 
         return HealthResponse(
             status=overall_status,
@@ -237,9 +236,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         },
     )
     async def submit_job(
-        file: Annotated[
-            UploadFile, File(description="OCR 対象ファイル（PDF または画像）")
-        ],
+        file: Annotated[UploadFile, File(description="OCR 対象ファイル（PDF または画像）")],
         request: Request,
         analyze_options: Annotated[dict[str, str], Depends(get_analyze_options)],
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
@@ -453,9 +450,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         },
     )
     async def submit_job_sync(
-        file: Annotated[
-            UploadFile, File(description="OCR 対象ファイル（PDF または画像）")
-        ],
+        file: Annotated[UploadFile, File(description="OCR 対象ファイル（PDF または画像）")],
         request: Request,
         analyze_options: Annotated[dict[str, str], Depends(get_analyze_options)],
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
@@ -540,7 +535,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 timeout_seconds=app_settings.sync_timeout_seconds,
                 poll_interval_seconds=app_settings.poll_interval_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise HTTPException(
                 status_code=status.HTTP_408_REQUEST_TIMEOUT,
                 detail={
@@ -579,6 +574,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         file: Annotated[UploadFile, File(description="決算短信 PDF")],
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
         app_settings: Annotated[Settings, Depends(get_app_settings)],
+        repository: Annotated[AnalysisRepository, Depends(get_analysis_repository)],
     ) -> FinancialSummaryResponse:
         content_type = (file.content_type or "").lower().split(";")[0].strip()
         if content_type != "application/pdf":
@@ -598,7 +594,80 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail={"code": "FILE_TOO_LARGE", "message": "PDF がサイズ上限を超えています。"},
             )
 
+        db_started = perf_counter()
+        document = await repository.get_or_create_document(
+            digest=sha256(content).hexdigest(),
+            filename=file.filename or "document.pdf",
+            content_type=content_type,
+            content=content,
+        )
+        analysis, claimed = await repository.claim_analysis(
+            document.id, app_settings.analysis_processing_version
+        )
+        db_ms = (perf_counter() - db_started) * 1000
+        trace = await repository.start_trace(document.id, "financial_summary")
+        started = perf_counter()
+        operation_id: str | None = None
+        ocr_ms: float | None = None
+        extraction_ms: float | None = None
+
+        if not claimed:
+            try:
+                if analysis.status == "processing":
+                    analysis = await repository.wait_for_analysis(
+                        analysis.id,
+                        app_settings.sync_timeout_seconds,
+                        app_settings.poll_interval_seconds,
+                    )
+            except TimeoutError as exc:
+                await repository.finish_trace(
+                    trace.id,
+                    status="failed",
+                    total_ms=(perf_counter() - started) * 1000,
+                    cache_hit=True,
+                    db_ms=db_ms,
+                    error_code="CACHE_WAIT_TIMEOUT",
+                    error_message="同一 PDF の解析完了待機がタイムアウトしました。",
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_408_REQUEST_TIMEOUT,
+                    detail={
+                        "code": "CACHE_WAIT_TIMEOUT",
+                        "message": "同一 PDF の解析完了待機がタイムアウトしました。",
+                    },
+                ) from exc
+            if analysis.status == "succeeded":
+                await repository.finish_trace(
+                    trace.id,
+                    status="succeeded",
+                    total_ms=(perf_counter() - started) * 1000,
+                    cache_hit=True,
+                    db_ms=db_ms,
+                )
+                return FinancialSummaryResponse(
+                    document_id=str(document.id),
+                    cache_hit=True,
+                    fields=analysis.extracted_fields or [],
+                )
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                cache_hit=True,
+                db_ms=db_ms,
+                error_code="CACHED_ANALYSIS_FAILED",
+                error_message="保存済み解析に失敗しました。",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": "CACHED_ANALYSIS_FAILED",
+                    "message": "保存済み解析に失敗しました。",
+                },
+            )
+
         try:
+            ocr_started = perf_counter()
             operation_id = await di_client.submit_document(
                 content=content,
                 content_type=content_type,
@@ -609,14 +678,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 timeout_seconds=app_settings.sync_timeout_seconds,
                 poll_interval_seconds=app_settings.poll_interval_seconds,
             )
-            regions = build_source_regions(data.get("analyzeResult") or {})
+            ocr_ms = (perf_counter() - ocr_started) * 1000
+            ocr_result = data.get("analyzeResult") or {}
+            regions = build_source_regions(ocr_result)
+            extraction_started = perf_counter()
             fields = await FinancialSummaryExtractor(app_settings).extract(regions)
+            extraction_ms = (perf_counter() - extraction_started) * 1000
+            db_started = perf_counter()
+            await repository.complete_analysis(
+                analysis.id,
+                ocr_result=ocr_result,
+                fields=[field.model_dump(mode="json") for field in fields],
+            )
+            db_ms += (perf_counter() - db_started) * 1000
         except TimeoutError as exc:
+            await repository.fail_analysis(analysis.id)
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                operation_id=operation_id,
+                ocr_ms=ocr_ms,
+                extraction_ms=extraction_ms,
+                db_ms=db_ms,
+                error_code="APP_TIMEOUT",
+                error_message="PDF の解析がタイムアウトしました。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_408_REQUEST_TIMEOUT,
                 detail={"code": "APP_TIMEOUT", "message": "PDF の解析がタイムアウトしました。"},
             ) from exc
         except httpx.TimeoutException as exc:
+            await repository.fail_analysis(analysis.id)
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                operation_id=operation_id,
+                ocr_ms=ocr_ms,
+                extraction_ms=extraction_ms,
+                db_ms=db_ms,
+                error_code="UPSTREAM_TIMEOUT",
+                error_message="外部サービスがタイムアウトしました。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail={
@@ -625,6 +729,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             ) from exc
         except httpx.ConnectError as exc:
+            await repository.fail_analysis(analysis.id)
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                operation_id=operation_id,
+                ocr_ms=ocr_ms,
+                extraction_ms=extraction_ms,
+                db_ms=db_ms,
+                error_code="UPSTREAM_UNREACHABLE",
+                error_message="外部サービスに接続できません。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -634,17 +750,137 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ) from exc
         except httpx.HTTPStatusError as exc:
             logger.warning("Azure GPT が HTTP %d を返しました。", exc.response.status_code)
+            await repository.fail_analysis(analysis.id)
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                operation_id=operation_id,
+                ocr_ms=ocr_ms,
+                extraction_ms=extraction_ms,
+                db_ms=db_ms,
+                error_code="GPT_ERROR",
+                error_message=f"Azure GPT が HTTP {exc.response.status_code} を返しました。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={"code": "GPT_ERROR", "message": "Azure GPT による抽出に失敗しました。"},
             ) from exc
         except ValueError as exc:
+            await repository.fail_analysis(analysis.id)
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                operation_id=operation_id,
+                ocr_ms=ocr_ms,
+                extraction_ms=extraction_ms,
+                db_ms=db_ms,
+                error_code="EXTRACTION_FAILED",
+                error_message=str(exc),
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={"code": "EXTRACTION_FAILED", "message": str(exc)},
             ) from exc
+        except Exception as exc:
+            logger.exception("決算短信の解析結果保存に失敗しました。")
+            await repository.fail_analysis(analysis.id)
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                operation_id=operation_id,
+                ocr_ms=ocr_ms,
+                extraction_ms=extraction_ms,
+                db_ms=db_ms,
+                error_code="INTERNAL_ERROR",
+                error_message="解析結果の保存に失敗しました。",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "code": "INTERNAL_ERROR",
+                    "message": "解析結果の保存に失敗しました。",
+                },
+            ) from exc
 
-        return FinancialSummaryResponse(fields=fields)
+        await repository.finish_trace(
+            trace.id,
+            status="succeeded",
+            total_ms=(perf_counter() - started) * 1000,
+            operation_id=operation_id,
+            ocr_ms=ocr_ms,
+            extraction_ms=extraction_ms,
+            db_ms=db_ms,
+        )
+        return FinancialSummaryResponse(
+            document_id=str(document.id), cache_hit=False, fields=fields
+        )
+
+    @app.get(
+        f"{settings.api_prefix}/financial-summary/{{document_id}}/excel",
+        summary="保存済み決算情報を Excel で出力します",
+        tags=["financial-summary"],
+    )
+    async def export_financial_summary(
+        document_id: UUID,
+        app_settings: Annotated[Settings, Depends(get_app_settings)],
+        repository: Annotated[AnalysisRepository, Depends(get_analysis_repository)],
+    ) -> StreamingResponse:
+        started = perf_counter()
+        export_data = await repository.get_export_data(
+            document_id, app_settings.analysis_processing_version
+        )
+        if export_data is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "RESULT_NOT_FOUND",
+                    "message": "保存済み解析結果が見つかりません。",
+                },
+            )
+        document, analysis = export_data
+        trace = await repository.start_trace(document.id, "excel_export")
+        try:
+            content = build_financial_summary_excel(
+                filename=document.filename,
+                company_name=analysis.company_name,
+                securities_code=analysis.securities_code,
+                fiscal_period=analysis.fiscal_period,
+            )
+        except Exception as exc:
+            logger.exception("Excel の生成に失敗しました。")
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                cache_hit=True,
+                error_code="EXCEL_GENERATION_FAILED",
+                error_message="Excel の生成に失敗しました。",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "code": "EXCEL_GENERATION_FAILED",
+                    "message": "Excel の生成に失敗しました。",
+                },
+            ) from exc
+        await repository.finish_trace(
+            trace.id,
+            status="succeeded",
+            total_ms=(perf_counter() - started) * 1000,
+            cache_hit=True,
+        )
+        return StreamingResponse(
+            BytesIO(content),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="financial-summary-{document.id}.xlsx"'
+                )
+            },
+        )
 
     return app
 
