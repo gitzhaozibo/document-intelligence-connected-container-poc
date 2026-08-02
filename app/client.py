@@ -8,6 +8,7 @@ import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from typing import AsyncGenerator, Any
 
 import httpx
@@ -33,6 +34,17 @@ def _build_analyze_url(settings: Settings) -> str:
         f"/formrecognizer/documentModels/{settings.di_model_id}:analyze"
         f"?api-version={settings.di_api_version}"
     )
+
+
+def _build_analyze_params(
+    settings: Settings,
+    options: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """analyze リクエストのクエリパラメーターを構築します。"""
+    params = {"api-version": settings.di_api_version}
+    if options:
+        params.update(options)
+    return params
 
 
 def _build_result_url(settings: Settings, operation_id: str) -> str:
@@ -117,6 +129,7 @@ class DocumentIntelligenceClient:
         self,
         content: bytes,
         content_type: str,
+        options: Mapping[str, str] | None = None,
     ) -> str:
         """
         ドキュメントを Read コンテナーに送信して OCR ジョブを開始します。
@@ -137,9 +150,10 @@ class DocumentIntelligenceClient:
 
         try:
             response = await client.post(
-                url,
+                url.split("?", maxsplit=1)[0],
                 content=content,
                 headers={"Content-Type": content_type},
+                params=_build_analyze_params(self._settings, options),
             )
         except httpx.TimeoutException as exc:
             logger.warning("コンテナーへの接続がタイムアウトしました。url=%s", url)
