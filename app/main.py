@@ -13,11 +13,13 @@ Azure Document Intelligence Read Connected Container への
 
 import asyncio
 import logging
+import re
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, AsyncGenerator
+from typing import Annotated, Any
 
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from app.client import DocumentIntelligenceClient, lifespan_client
@@ -52,6 +54,68 @@ ALLOWED_CONTENT_TYPES: frozenset[str] = frozenset(
         "image/heif",
     }
 )
+ALLOWED_FEATURES: frozenset[str] = frozenset(
+    {"barcodes", "formulas", "languages", "ocrHighResolution", "styleFont"}
+)
+ALLOWED_OUTPUT_FORMATS: frozenset[str] = frozenset({"json", "markdown"})
+_PAGES_RE = re.compile(r"^[1-9]\d*(?:-[1-9]\d*)?(?:,[1-9]\d*(?:-[1-9]\d*)?)*$")
+_LOCALE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
+
+
+def build_analyze_options(
+    pages: str | None,
+    locale: str | None,
+    features: str | None,
+    output_content_format: str,
+) -> dict[str, str]:
+    """フォーム値を検証し、Document Intelligence のオプションへ変換します。"""
+    options: dict[str, str] = {}
+    normalized_pages = (pages or "").replace(" ", "")
+    if normalized_pages:
+        if not _PAGES_RE.fullmatch(normalized_pages):
+            raise ValueError("ページ指定は 1-3,5 の形式で入力してください。")
+        for page_range in normalized_pages.split(","):
+            bounds = [int(value) for value in page_range.split("-")]
+            if len(bounds) == 2 and bounds[0] > bounds[1]:
+                raise ValueError("ページ範囲の開始ページは終了ページ以下にしてください。")
+        options["pages"] = normalized_pages
+
+    normalized_locale = (locale or "").strip()
+    if normalized_locale:
+        if not _LOCALE_RE.fullmatch(normalized_locale):
+            raise ValueError("ロケールは ja-JP のような形式で入力してください。")
+        options["locale"] = normalized_locale
+
+    feature_values = (features or "").split(",")
+    normalized_features = [value.strip() for value in feature_values if value.strip()]
+    invalid_features = sorted(set(normalized_features) - ALLOWED_FEATURES)
+    if invalid_features:
+        raise ValueError(f"サポートされていない機能です: {', '.join(invalid_features)}")
+    if normalized_features:
+        options["features"] = ",".join(dict.fromkeys(normalized_features))
+
+    if output_content_format not in ALLOWED_OUTPUT_FORMATS:
+        raise ValueError("出力形式は json または markdown を指定してください。")
+    options["outputContentFormat"] = output_content_format
+    return options
+
+
+def get_analyze_options(
+    pages: Annotated[str | None, Form(description="処理対象ページ（例: 1-3,5）")] = None,
+    locale: Annotated[str | None, Form(description="ドキュメントのロケール（例: ja-JP）")] = None,
+    features: Annotated[str | None, Form(description="追加機能（カンマ区切り）")] = None,
+    output_content_format: Annotated[
+        str, Form(description="出力形式: json または markdown")
+    ] = "json",
+) -> dict[str, str]:
+    """multipart/form-data の解析オプションを検証します。"""
+    try:
+        return build_analyze_options(pages, locale, features, output_content_format)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_ANALYZE_OPTIONS", "message": str(exc)},
+        ) from exc
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -157,6 +221,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def submit_job(
         file: Annotated[UploadFile, File(description="OCR 対象ファイル（PDF または画像）")],
         request: Request,
+        analyze_options: Annotated[dict[str, str], Depends(get_analyze_options)],
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
         app_settings: Annotated[Settings, Depends(get_app_settings)],
     ) -> JobSubmitResponse:
@@ -207,6 +272,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             operation_id = await di_client.submit_document(
                 content=content,
                 content_type=content_type,
+                options=analyze_options,
             )
         except httpx.TimeoutException:
             raise HTTPException(
@@ -367,6 +433,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def submit_job_sync(
         file: Annotated[UploadFile, File(description="OCR 対象ファイル（PDF または画像）")],
         request: Request,
+        analyze_options: Annotated[dict[str, str], Depends(get_analyze_options)],
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
         app_settings: Annotated[Settings, Depends(get_app_settings)],
     ) -> JobStatusResponse:
@@ -415,6 +482,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             operation_id = await di_client.submit_document(
                 content=content,
                 content_type=content_type,
+                options=analyze_options,
             )
         except httpx.TimeoutException:
             raise HTTPException(

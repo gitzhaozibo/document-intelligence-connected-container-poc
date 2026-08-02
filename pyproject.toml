@@ -2,6 +2,10 @@
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+markers = [
+    "integration: FastAPI と周辺コンポーネントの結合テスト",
+    "e2e: Streamlit 画面または実サービスを使用する E2E テスト",
+]
 
 [tool.ruff]
 line-length = 100

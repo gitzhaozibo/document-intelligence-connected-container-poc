@@ -30,7 +30,7 @@ Azure AI Document Intelligence Read **接続コンテナー（Connected Containe
 ローカル PC（Windows + Docker Desktop）
 ┌─────────────────────────────────────────────────────────────┐
 │                                                             │
-│  クライアント（curl / PowerShell / ブラウザ）                  │
+│  Streamlit (8501) / curl / PowerShell                         │
 │       │                                                     │
 │       ▼ HTTP                                                │
 │  ┌──────────────────┐                                       │
@@ -308,11 +308,21 @@ curl http://localhost:8000/api/v1/health
 
 ### 5-7. Swagger UI を開く
 
+- **Streamlit フロント画面**: http://localhost:8501
 - **FastAPI Swagger**: http://localhost:8000/docs
 - **FastAPI ReDoc**: http://localhost:8000/redoc
 - **Read コンテナー Swagger**: コンテナーイメージによって異なります。Microsoft ドキュメントまたはコンテナーのログで確認してください（例: `http://localhost:5000/formrecognizer/swagger/index.html`）
 
 ### 5-8. PDF を送信して OCR を実行する
+
+#### Streamlit フロント画面を使用する場合
+
+1. http://localhost:8501 をブラウザーで開きます。
+2. PDF または対応画像をアップロードします。
+3. 必要に応じて対象ページ（例: `1-3,5`）、言語ロケール、出力形式、追加解析機能を設定します。
+4. **実行**を選択すると、FastAPI 経由で OCR が実行され、抽出テキストと JSON 結果が表示されます。
+
+Streamlit は PoC 用の同期 API を使用します。大きなファイルでは、下記の非同期 API を使用してください。
 
 #### 非同期フロー（推奨）
 
@@ -668,8 +678,13 @@ pip install -r requirements-dev.txt
 ### テストの実行
 
 ```powershell
-# テストを実行（Azure や Read コンテナーは不要）
+# 単体・結合・E2E スモークテストを実行（Azure や Read コンテナーは不要）
 python -m pytest tests/ -v
+
+# 種別ごとに実行
+python -m pytest tests/unit -v
+python -m pytest tests/integration -v
+python -m pytest tests/e2e -v
 
 # カバレッジ付きで実行
 python -m pytest tests/ -v --cov=app
@@ -679,13 +694,13 @@ python -m pytest tests/ -v --cov=app
 
 ```powershell
 # リントチェック
-ruff check app/ tests/
+ruff check app/ frontend/ tests/
 
 # 自動修正
-ruff check --fix app/ tests/
+ruff check --fix app/ frontend/ tests/
 
 # フォーマット
-ruff format app/ tests/
+ruff format app/ frontend/ tests/
 ```
 
 ### アプリをローカルで直接起動（コンテナーなし）
@@ -693,6 +708,10 @@ ruff format app/ tests/
 ```powershell
 # .env を読み込んで起動
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 別のターミナルで Streamlit を起動
+$env:FASTAPI_BASE_URL = "http://localhost:8000"
+streamlit run frontend/app.py
 ```
 
 ---
@@ -706,7 +725,13 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 │   ├── client.py       # Document Intelligence クライアント
 │   ├── main.py         # FastAPI アプリケーション
 │   └── models.py       # Pydantic リクエスト/レスポンスモデル
+├── frontend/
+│   ├── api_client.py   # FastAPI クライアント
+│   └── app.py          # Streamlit フロント画面
 ├── tests/
+│   ├── unit/           # 単体テスト
+│   ├── integration/    # 結合テスト
+│   ├── e2e/            # E2E スモークテスト
 │   ├── conftest.py     # テストフィクスチャ
 │   ├── test_health.py  # ヘルスチェックテスト
 │   ├── test_upload.py  # アップロードバリデーションテスト
@@ -715,8 +740,10 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ├── .gitignore          # Git 除外設定
 ├── compose.yaml        # Docker Compose 設定
 ├── Dockerfile          # FastAPI コンテナーイメージ
+├── Dockerfile.streamlit # Streamlit コンテナーイメージ
 ├── pyproject.toml      # pytest / ruff 設定
 ├── requirements.txt    # 本番依存関係
+├── requirements-frontend.txt # Streamlit 依存関係
 └── requirements-dev.txt # 開発・テスト依存関係
 ```
 
