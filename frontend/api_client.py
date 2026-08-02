@@ -78,3 +78,19 @@ class DocumentApiClient:
             return response.json()
         except ValueError as exc:
             raise ApiError("FastAPI から無効な JSON レスポンスを受信しました。") from exc
+
+    def download_financial_summary_excel(self, document_id: str) -> bytes:
+        """保存済み決算情報の Excel を取得します。"""
+        try:
+            response = httpx.get(
+                f"{self._base_url}/api/v1/financial-summary/{document_id}/excel",
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ApiError(_error_message(exc.response)) from exc
+        except httpx.RequestError as exc:
+            raise ApiError(
+                "FastAPI に接続できません。サービスの起動状態を確認してください。"
+            ) from exc
+        return response.content

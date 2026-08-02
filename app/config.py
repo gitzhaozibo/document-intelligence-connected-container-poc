@@ -66,6 +66,16 @@ class Settings(BaseSettings):
         default="/api/v1",
         description="API ルートのプレフィックス",
     )
+    database_url: str = Field(
+        default="******postgres:5432/document_app",
+        description="SQLAlchemy 非同期データベース接続 URL",
+    )
+    analysis_processing_version: str = Field(
+        default="financial-summary-v1",
+        min_length=1,
+        max_length=100,
+        description="同一 PDF の再解析要否を判定する処理バージョン",
+    )
 
     # ---- ポーリング・タイムアウト設定 ----
     poll_interval_seconds: float = Field(
