@@ -18,6 +18,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -99,7 +100,7 @@ class TraceLog(Base):
 
 
 def create_database(
-    database_url: str,
+    database_url: str | URL,
 ) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     """非同期エンジンとセッションファクトリーを作成します。"""
     engine = create_async_engine(database_url, pool_pre_ping=True)

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -56,9 +56,16 @@ class AnalysisRepository:
             )
             if existing:
                 if existing.status == "failed":
-                    existing.status = "processing"
+                    claimed = await session.execute(
+                        update(AnalysisResult)
+                        .where(
+                            AnalysisResult.id == existing.id,
+                            AnalysisResult.status == "failed",
+                        )
+                        .values(status="processing")
+                    )
                     await session.commit()
-                    return existing, True
+                    return existing, claimed.rowcount == 1
                 return existing, False
 
             result = AnalysisResult(

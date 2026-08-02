@@ -151,7 +151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not settings.di_api_key:
             logger.warning("DI_API_KEY が設定されていません。.env ファイルを確認してください。")
 
-        database_engine, session_factory = create_database(settings.database_url)
+        database_engine, session_factory = create_database(settings.get_database_url())
         async with lifespan_client(settings) as di_client:
             app.state.di_client = di_client
             app.state.settings = settings
@@ -783,6 +783,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={"code": "EXTRACTION_FAILED", "message": str(exc)},
             ) from exc
+        except Exception as exc:
+            logger.exception("決算短信の解析結果保存に失敗しました。")
+            await repository.fail_analysis(analysis.id)
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                operation_id=operation_id,
+                ocr_ms=ocr_ms,
+                extraction_ms=extraction_ms,
+                db_ms=db_ms,
+                error_code="INTERNAL_ERROR",
+                error_message="解析結果の保存に失敗しました。",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "code": "INTERNAL_ERROR",
+                    "message": "解析結果の保存に失敗しました。",
+                },
+            ) from exc
 
         await repository.finish_trace(
             trace.id,
@@ -821,12 +842,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         document, analysis = export_data
         trace = await repository.start_trace(document.id, "excel_export")
-        content = build_financial_summary_excel(
-            filename=document.filename,
-            company_name=analysis.company_name,
-            securities_code=analysis.securities_code,
-            fiscal_period=analysis.fiscal_period,
-        )
+        try:
+            content = build_financial_summary_excel(
+                filename=document.filename,
+                company_name=analysis.company_name,
+                securities_code=analysis.securities_code,
+                fiscal_period=analysis.fiscal_period,
+            )
+        except Exception as exc:
+            logger.exception("Excel の生成に失敗しました。")
+            await repository.finish_trace(
+                trace.id,
+                status="failed",
+                total_ms=(perf_counter() - started) * 1000,
+                cache_hit=True,
+                error_code="EXCEL_GENERATION_FAILED",
+                error_message="Excel の生成に失敗しました。",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "code": "EXCEL_GENERATION_FAILED",
+                    "message": "Excel の生成に失敗しました。",
+                },
+            ) from exc
         await repository.finish_trace(
             trace.id,
             status="succeeded",

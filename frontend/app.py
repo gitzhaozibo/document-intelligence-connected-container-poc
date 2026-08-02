@@ -139,6 +139,7 @@ def run_app() -> None:
                 else:
                     st.session_state["summary_result"] = summary
                     st.session_state["summary_document_id"] = document_id
+                    st.session_state.pop("summary_excel", None)
 
         summary_result = st.session_state.get("summary_result")
         if summary_result and st.session_state.get("summary_document_id") == document_id:
