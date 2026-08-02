@@ -13,7 +13,11 @@ def test_frontend_client_uploads_file_and_options() -> None:
         route = respx.post("http://fastapi:8000/api/v1/ocr/jobs/sync").mock(
             return_value=httpx.Response(
                 200,
-                json={"job_id": "job-1", "status": "succeeded", "result": {"content": "結果"}},
+                json={
+                    "job_id": "job-1",
+                    "status": "succeeded",
+                    "result": {"content": "結果"},
+                },
             )
         )
         result = DocumentApiClient("http://fastapi:8000/").analyze(
@@ -24,7 +28,7 @@ def test_frontend_client_uploads_file_and_options() -> None:
                 "pages": "1-2",
                 "locale": "ja-JP",
                 "features": "languages",
-                "output_content_format": "json",
+                "output_content_format": "text",
             },
         )
 
@@ -43,7 +47,9 @@ def test_frontend_client_exposes_api_error_message() -> None:
         respx.post("http://fastapi:8000/api/v1/ocr/jobs/sync").mock(
             return_value=httpx.Response(
                 400,
-                json={"detail": {"code": "INVALID", "message": "ページ指定が不正です。"}},
+                json={
+                    "detail": {"code": "INVALID", "message": "ページ指定が不正です。"}
+                },
             )
         )
 

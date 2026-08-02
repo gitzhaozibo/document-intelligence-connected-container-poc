@@ -31,7 +31,7 @@ def _build_analyze_url(settings: Settings) -> str:
     """analyze エンドポイントの URL を構築します。"""
     return (
         f"{settings.di_container_endpoint}"
-        f"/formrecognizer/documentModels/{settings.di_model_id}:analyze"
+        f"/documentintelligence/documentModels/{settings.di_model_id}:analyze"
         f"?api-version={settings.di_api_version}"
     )
 
@@ -51,7 +51,7 @@ def _build_result_url(settings: Settings, operation_id: str) -> str:
     """analyzeResults エンドポイントの URL を構築します。"""
     return (
         f"{settings.di_container_endpoint}"
-        f"/formrecognizer/documentModels/{settings.di_model_id}/analyzeResults/{operation_id}"
+        f"/documentintelligence/documentModels/{settings.di_model_id}/analyzeResults/{operation_id}"
         f"?api-version={settings.di_api_version}"
     )
 
@@ -71,7 +71,7 @@ def _extract_operation_id_from_location(operation_location: str) -> str | None:
     Operation-Location ヘッダーから操作 ID を抽出します。
 
     例:
-      http://localhost:5000/formrecognizer/documentModels/prebuilt-read/analyzeResults/abc-123?api-version=2024-11-30
+            http://localhost:5000/documentintelligence/documentModels/prebuilt-read/analyzeResults/abc-123?api-version=2024-11-30
       → "abc-123"
     """
     # パス部分から analyzeResults/ 以降を取得
@@ -82,6 +82,32 @@ def _extract_operation_id_from_location(operation_location: str) -> str | None:
     if not validate_operation_id(operation_id):
         return None
     return operation_id
+
+
+def _container_error_message(response: httpx.Response) -> str:
+    """コンテナーの標準エラーからコードとメッセージだけを抽出します。"""
+    try:
+        payload = response.json()
+    except ValueError:
+        return f"HTTP {response.status_code}"
+
+    error = payload.get("error", {}) if isinstance(payload, dict) else {}
+    if not isinstance(error, dict):
+        return f"HTTP {response.status_code}"
+
+    details: list[str] = []
+    current = error
+    for _ in range(3):
+        code = current.get("code")
+        message = current.get("message")
+        detail = ": ".join(str(value) for value in (code, message) if value)
+        if detail:
+            details.append(detail)
+        inner_error = current.get("innererror")
+        if not isinstance(inner_error, dict):
+            break
+        current = inner_error
+    return " / ".join(details) or f"HTTP {response.status_code}"
 
 
 class DocumentIntelligenceClient:
@@ -111,7 +137,10 @@ class DocumentIntelligenceClient:
                 keepalive_expiry=30.0,
             ),
         )
-        logger.info("DocumentIntelligenceClient を初期化しました。endpoint=%s", self._settings.di_container_endpoint)
+        logger.info(
+            "DocumentIntelligenceClient を初期化しました。endpoint=%s",
+            self._settings.di_container_endpoint,
+        )
 
     async def stop(self) -> None:
         """クライアントを終了します。アプリケーション終了時に呼び出してください。"""
@@ -122,7 +151,9 @@ class DocumentIntelligenceClient:
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            raise RuntimeError("クライアントが初期化されていません。start() を呼び出してください。")
+            raise RuntimeError(
+                "クライアントが初期化されていません。start() を呼び出してください。"
+            )
         return self._client
 
     async def submit_document(
@@ -146,7 +177,11 @@ class DocumentIntelligenceClient:
         url = _build_analyze_url(self._settings)
 
         # セキュリティ: ドキュメント内容はログに出力しない
-        logger.info("OCR ジョブを送信します。content_type=%s, size=%d bytes", content_type, len(content))
+        logger.info(
+            "OCR ジョブを送信します。content_type=%s, size=%d bytes",
+            content_type,
+            len(content),
+        )
 
         try:
             response = await client.post(
@@ -168,12 +203,15 @@ class DocumentIntelligenceClient:
                 response.status_code,
             )
             raise ValueError(
-                f"コンテナーから予期しないステータスコードが返されました: {response.status_code}"
+                "コンテナーがリクエストを拒否しました: "
+                f"{_container_error_message(response)}"
             )
 
         operation_location = response.headers.get("Operation-Location", "")
         if not operation_location:
-            raise ValueError("コンテナーレスポンスに Operation-Location ヘッダーがありません。")
+            raise ValueError(
+                "コンテナーレスポンスに Operation-Location ヘッダーがありません。"
+            )
 
         operation_id = _extract_operation_id_from_location(operation_location)
         if not operation_id:
@@ -208,10 +246,14 @@ class DocumentIntelligenceClient:
         try:
             response = await client.get(url)
         except httpx.TimeoutException as exc:
-            logger.warning("ジョブ結果取得がタイムアウトしました。operation_id=%s", operation_id)
+            logger.warning(
+                "ジョブ結果取得がタイムアウトしました。operation_id=%s", operation_id
+            )
             raise exc
         except httpx.ConnectError as exc:
-            logger.warning("コンテナーへの接続に失敗しました。operation_id=%s", operation_id)
+            logger.warning(
+                "コンテナーへの接続に失敗しました。operation_id=%s", operation_id
+            )
             raise exc
 
         if response.status_code == 404:
@@ -230,7 +272,9 @@ class DocumentIntelligenceClient:
         try:
             data = response.json()
         except Exception as exc:
-            raise ValueError("コンテナーレスポンスの JSON 解析に失敗しました。") from exc
+            raise ValueError(
+                "コンテナーレスポンスの JSON 解析に失敗しました。"
+            ) from exc
 
         # セキュリティ: OCR 結果はログに出力しない
         logger.info(
@@ -285,7 +329,10 @@ class DocumentIntelligenceClient:
                 "message": "コンテナーへの接続がタイムアウトしました。",
             }
         except Exception as exc:
-            logger.warning("コンテナーヘルスチェックで予期しないエラーが発生しました。error=%s", type(exc).__name__)
+            logger.warning(
+                "コンテナーヘルスチェックで予期しないエラーが発生しました。error=%s",
+                type(exc).__name__,
+            )
             return {
                 "reachable": False,
                 "status": None,
@@ -344,7 +391,9 @@ class DocumentIntelligenceClient:
 
 
 @asynccontextmanager
-async def lifespan_client(settings: Settings) -> AsyncGenerator[DocumentIntelligenceClient, None]:
+async def lifespan_client(
+    settings: Settings,
+) -> AsyncGenerator[DocumentIntelligenceClient, None]:
     """FastAPI lifespan で使用するコンテキストマネージャー。"""
     client = DocumentIntelligenceClient(settings)
     await client.start()

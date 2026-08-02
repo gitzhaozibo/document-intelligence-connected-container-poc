@@ -23,9 +23,13 @@ def _display_result(result: dict[str, Any]) -> None:
 
 def run_app() -> None:
     """Streamlit アプリケーションを描画します。"""
-    st.set_page_config(page_title="Document Intelligence PoC", page_icon="📄", layout="wide")
+    st.set_page_config(
+        page_title="Document Intelligence PoC", page_icon="📄", layout="wide"
+    )
     st.title("Document Intelligence Connected Container PoC")
-    st.write("PDF または画像をアップロードし、FastAPI 経由でローカル OCR を実行します。")
+    st.write(
+        "PDF または画像をアップロードし、FastAPI 経由でローカル OCR を実行します。"
+    )
 
     uploaded_file = st.file_uploader(
         "解析するファイル",
@@ -34,12 +38,18 @@ def run_app() -> None:
     )
 
     with st.expander("ページ・解析オプション", expanded=True):
-        pages = st.text_input("対象ページ", placeholder="例: 1-3,5", help="空欄の場合は全ページ")
+        pages = st.text_input(
+            "対象ページ", placeholder="例: 1-3,5", help="空欄の場合は全ページ"
+        )
         locale = st.text_input("言語ロケール", placeholder="例: ja-JP")
-        output_format = st.selectbox("出力形式", options=["json", "markdown"])
-        high_resolution = st.checkbox("高解像度 OCR", help="ocrHighResolution 機能を有効にします")
+        output_format = st.selectbox("本文形式", options=["text", "markdown"])
+        high_resolution = st.checkbox(
+            "高解像度 OCR", help="ocrHighResolution 機能を有効にします"
+        )
         detect_languages = st.checkbox("言語検出", help="languages 機能を有効にします")
-        detect_barcodes = st.checkbox("バーコード検出", help="barcodes 機能を有効にします")
+        detect_barcodes = st.checkbox(
+            "バーコード検出", help="barcodes 機能を有効にします"
+        )
 
     if st.button("実行", type="primary", disabled=uploaded_file is None):
         features = [

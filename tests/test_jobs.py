@@ -22,7 +22,10 @@ class TestOperationIdValidation:
         """有効な操作 ID を受け付けることを確認します。"""
         assert validate_operation_id("abc-123") is True
         assert validate_operation_id("TEST_OPERATION_ID") is True
-        assert validate_operation_id("abcdef1234567890-abcd-efgh-ijkl-mnopqrstuvwx") is True
+        assert (
+            validate_operation_id("abcdef1234567890-abcd-efgh-ijkl-mnopqrstuvwx")
+            is True
+        )
 
     def test_invalid_operation_id_empty(self) -> None:
         """空の操作 ID を拒否することを確認します。"""
@@ -56,7 +59,7 @@ class TestExtractOperationId:
     def test_extract_from_standard_url(self, mock_operation_id: str) -> None:
         """標準的な Operation-Location URL から操作 ID を抽出できることを確認します。"""
         url = (
-            f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+            f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
             f"/analyzeResults/{mock_operation_id}?api-version=2024-11-30"
         )
         result = _extract_operation_id_from_location(url)
@@ -65,7 +68,7 @@ class TestExtractOperationId:
     def test_extract_from_url_without_query(self, mock_operation_id: str) -> None:
         """クエリパラメーターなしの URL から操作 ID を抽出できることを確認します。"""
         url = (
-            f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+            f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
             f"/analyzeResults/{mock_operation_id}"
         )
         result = _extract_operation_id_from_location(url)
@@ -73,7 +76,9 @@ class TestExtractOperationId:
 
     def test_extract_returns_none_for_invalid_url(self) -> None:
         """無効な URL から None を返すことを確認します。"""
-        result = _extract_operation_id_from_location("http://localhost:5000/invalid/path")
+        result = _extract_operation_id_from_location(
+            "http://localhost:5000/invalid/path"
+        )
         assert result is None
 
     def test_extract_returns_none_for_empty_string(self) -> None:
@@ -83,7 +88,7 @@ class TestExtractOperationId:
 
     def test_extract_rejects_invalid_operation_id_in_url(self) -> None:
         """無効な操作 ID を含む URL から None を返すことを確認します。"""
-        url = "http://localhost:5000/formrecognizer/documentModels/prebuilt-read/analyzeResults/../secrets"
+        url = "http://localhost:5000/documentintelligence/documentModels/prebuilt-read/analyzeResults/../secrets"
         result = _extract_operation_id_from_location(url)
         assert result is None
 
@@ -102,7 +107,7 @@ class TestJobSubmit:
         """ジョブ送信成功時に HTTP 202 を返すことを確認します。"""
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(
                 return_value=Response(
                     202,
@@ -130,7 +135,7 @@ class TestJobSubmit:
 
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(side_effect=httpx.ConnectError("Connection refused"))
 
             response = await async_client.post(
@@ -151,7 +156,7 @@ class TestJobSubmit:
 
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(side_effect=httpx.TimeoutException("Timeout"))
 
             response = await async_client.post(
@@ -170,7 +175,7 @@ class TestJobSubmit:
         """コンテナーが 500 エラーを返した場合、HTTP 502 を返すことを確認します。"""
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(return_value=Response(500))
 
             response = await async_client.post(
@@ -183,14 +188,50 @@ class TestJobSubmit:
         assert data["detail"]["code"] == "INVALID_CONTAINER_RESPONSE"
 
     @pytest.mark.asyncio
+    async def test_submit_exposes_structured_container_error(
+        self, async_client: AsyncClient, sample_pdf_content: bytes
+    ) -> None:
+        """コンテナーのエラーコードとメッセージを利用者へ返します。"""
+        with respx.mock:
+            respx.post(
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
+            ).mock(
+                return_value=Response(
+                    400,
+                    json={
+                        "error": {
+                            "code": "InvalidArgument",
+                            "message": "Invalid argument.",
+                            "innererror": {
+                                "code": "InvalidParameter",
+                                "message": "The API version is unsupported.",
+                            },
+                        }
+                    },
+                )
+            )
+
+            response = await async_client.post(
+                "/api/v1/ocr/jobs",
+                files={"file": ("test.pdf", sample_pdf_content, "application/pdf")},
+            )
+
+        assert response.status_code == 502
+        message = response.json()["detail"]["message"]
+        assert "InvalidArgument: Invalid argument." in message
+        assert "InvalidParameter: The API version is unsupported." in message
+
+    @pytest.mark.asyncio
     async def test_submit_missing_operation_location_header(
         self, async_client: AsyncClient, sample_pdf_content: bytes
     ) -> None:
         """Operation-Location ヘッダーがない場合、HTTP 502 を返すことを確認します。"""
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
-            ).mock(return_value=Response(202))  # ヘッダーなし
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
+            ).mock(
+                return_value=Response(202)
+            )  # ヘッダーなし
 
             response = await async_client.post(
                 "/api/v1/ocr/jobs",
@@ -213,13 +254,11 @@ class TestJobPolling:
         """実行中のジョブのステータスが running であることを確認します。"""
         with respx.mock:
             respx.get(
-                f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+                f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
                 f"/analyzeResults/{mock_operation_id}"
             ).mock(return_value=Response(200, json=running_result))
 
-            response = await async_client.get(
-                f"/api/v1/ocr/jobs/{mock_operation_id}"
-            )
+            response = await async_client.get(f"/api/v1/ocr/jobs/{mock_operation_id}")
 
         assert response.status_code == 200
         data = response.json()
@@ -237,13 +276,11 @@ class TestJobPolling:
         """成功したジョブの結果が返されることを確認します。"""
         with respx.mock:
             respx.get(
-                f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+                f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
                 f"/analyzeResults/{mock_operation_id}"
             ).mock(return_value=Response(200, json=succeeded_result))
 
-            response = await async_client.get(
-                f"/api/v1/ocr/jobs/{mock_operation_id}"
-            )
+            response = await async_client.get(f"/api/v1/ocr/jobs/{mock_operation_id}")
 
         assert response.status_code == 200
         data = response.json()
@@ -261,13 +298,11 @@ class TestJobPolling:
         """失敗したジョブのエラー情報が返されることを確認します。"""
         with respx.mock:
             respx.get(
-                f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+                f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
                 f"/analyzeResults/{mock_operation_id}"
             ).mock(return_value=Response(200, json=failed_result))
 
-            response = await async_client.get(
-                f"/api/v1/ocr/jobs/{mock_operation_id}"
-            )
+            response = await async_client.get(f"/api/v1/ocr/jobs/{mock_operation_id}")
 
         assert response.status_code == 200
         data = response.json()
@@ -300,13 +335,11 @@ class TestJobPolling:
         """存在しないジョブで HTTP 404 を返すことを確認します。"""
         with respx.mock:
             respx.get(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
                 "/analyzeResults/nonexistent-job-id"
             ).mock(return_value=Response(404))
 
-            response = await async_client.get(
-                "/api/v1/ocr/jobs/nonexistent-job-id"
-            )
+            response = await async_client.get("/api/v1/ocr/jobs/nonexistent-job-id")
 
         assert response.status_code == 404
         data = response.json()
@@ -321,13 +354,11 @@ class TestJobPolling:
 
         with respx.mock:
             respx.get(
-                f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+                f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
                 f"/analyzeResults/{mock_operation_id}"
             ).mock(side_effect=httpx.ConnectError("Connection refused"))
 
-            response = await async_client.get(
-                f"/api/v1/ocr/jobs/{mock_operation_id}"
-            )
+            response = await async_client.get(f"/api/v1/ocr/jobs/{mock_operation_id}")
 
         assert response.status_code == 502
         data = response.json()
@@ -349,7 +380,7 @@ class TestSyncJobEndpoint:
         """同期エンドポイントで OCR 完了結果を受け取れることを確認します。"""
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(
                 return_value=Response(
                     202,
@@ -357,7 +388,7 @@ class TestSyncJobEndpoint:
                 )
             )
             respx.get(
-                f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+                f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
                 f"/analyzeResults/{mock_operation_id}"
             ).mock(return_value=Response(200, json=succeeded_result))
 
@@ -385,7 +416,7 @@ class TestSyncJobEndpoint:
 
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(
                 return_value=Response(
                     202,
@@ -394,7 +425,7 @@ class TestSyncJobEndpoint:
             )
             # 常に running を返してタイムアウトを引き起こす
             respx.get(
-                f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+                f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
                 f"/analyzeResults/{mock_operation_id}"
             ).mock(return_value=Response(200, json=running_result))
 

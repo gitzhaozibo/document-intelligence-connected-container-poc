@@ -51,7 +51,7 @@ class TestUploadValidation:
         """PDF コンテンツタイプを受け付けることを確認します。"""
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(
                 return_value=Response(
                     202,
@@ -79,7 +79,7 @@ class TestUploadValidation:
         """JPEG コンテンツタイプを受け付けることを確認します。"""
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(
                 return_value=Response(
                     202,
@@ -136,7 +136,7 @@ class TestUploadValidation:
 
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(
                 return_value=Response(
                     202,
@@ -162,7 +162,7 @@ class TestUploadValidation:
         """charset パラメーター付きのコンテンツタイプを正しく処理することを確認します。"""
         with respx.mock:
             respx.post(
-                "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+                "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
             ).mock(
                 return_value=Response(
                     202,

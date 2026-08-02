@@ -16,7 +16,7 @@ async def test_sync_flow_forwards_analyze_options(
 ) -> None:
     with respx.mock:
         submit_route = respx.post(
-            "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+            "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
         ).mock(
             return_value=Response(
                 202,
@@ -24,7 +24,7 @@ async def test_sync_flow_forwards_analyze_options(
             )
         )
         respx.get(
-            f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+            f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
             f"/analyzeResults/{mock_operation_id}"
         ).mock(return_value=Response(200, json=succeeded_result))
 

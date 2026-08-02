@@ -24,14 +24,19 @@ def test_build_analyze_options_normalizes_values() -> None:
 @pytest.mark.parametrize("pages", ["0", "3-1", "1,,2", "all", "1;2"])
 def test_build_analyze_options_rejects_invalid_pages(pages: str) -> None:
     with pytest.raises(ValueError, match="ページ"):
-        build_analyze_options(pages, None, None, "json")
+        build_analyze_options(pages, None, None, "text")
 
 
 def test_build_analyze_options_rejects_unknown_feature() -> None:
     with pytest.raises(ValueError, match="unknownFeature"):
-        build_analyze_options(None, None, "languages,unknownFeature", "json")
+        build_analyze_options(None, None, "languages,unknownFeature", "text")
 
 
 def test_build_analyze_options_rejects_invalid_locale() -> None:
     with pytest.raises(ValueError, match="ロケール"):
-        build_analyze_options(None, "../../ja", None, "json")
+        build_analyze_options(None, "../../ja", None, "text")
+
+
+def test_build_analyze_options_rejects_json_content_format() -> None:
+    with pytest.raises(ValueError, match="text または markdown"):
+        build_analyze_options(None, None, None, "json")

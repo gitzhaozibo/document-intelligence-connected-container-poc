@@ -83,14 +83,14 @@ def mock_operation_id() -> str:
 @pytest.fixture
 def mock_analyze_url() -> str:
     """テスト用 analyze エンドポイント URL。"""
-    return "http://localhost:5000/formrecognizer/documentModels/prebuilt-read:analyze"
+    return "http://localhost:5000/documentintelligence/documentModels/prebuilt-read:analyze"
 
 
 @pytest.fixture
 def mock_result_url(mock_operation_id: str) -> str:
     """テスト用 analyzeResults エンドポイント URL。"""
     return (
-        f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+        f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
         f"/analyzeResults/{mock_operation_id}"
     )
 
@@ -99,7 +99,7 @@ def mock_result_url(mock_operation_id: str) -> str:
 def operation_location_header(mock_operation_id: str) -> str:
     """テスト用 Operation-Location ヘッダー値。"""
     return (
-        f"http://localhost:5000/formrecognizer/documentModels/prebuilt-read"
+        f"http://localhost:5000/documentintelligence/documentModels/prebuilt-read"
         f"/analyzeResults/{mock_operation_id}?api-version=2024-11-30"
     )
 
