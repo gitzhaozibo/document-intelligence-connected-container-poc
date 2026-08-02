@@ -46,7 +46,12 @@ services:
     # /status エンドポイントが存在するかどうかはイメージによって異なります。
     # ヘルスチェック URL は使用するイメージで確認してください。
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:5000/status || exit 1"]
+      test:
+        - CMD-SHELL
+        - >-
+          bash -c 'exec 3<>/dev/tcp/127.0.0.1/5000 &&
+          printf "GET /ready HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 &&
+          grep -q '"'"'"ready":"ready"'"'"' <&3'
       interval: 30s
       timeout: 15s
       start_period: 120s
