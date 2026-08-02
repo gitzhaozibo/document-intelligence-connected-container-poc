@@ -611,7 +611,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             regions = build_source_regions(data.get("analyzeResult") or {})
             fields = await FinancialSummaryExtractor(app_settings).extract(regions)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise HTTPException(
                 status_code=status.HTTP_408_REQUEST_TIMEOUT,
                 detail={"code": "APP_TIMEOUT", "message": "PDF の解析がタイムアウトしました。"},
@@ -619,12 +619,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except httpx.TimeoutException as exc:
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail={"code": "UPSTREAM_TIMEOUT", "message": "外部サービスがタイムアウトしました。"},
+                detail={
+                    "code": "UPSTREAM_TIMEOUT",
+                    "message": "外部サービスがタイムアウトしました。",
+                },
             ) from exc
         except httpx.ConnectError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={"code": "UPSTREAM_UNREACHABLE", "message": "外部サービスに接続できません。"},
+                detail={
+                    "code": "UPSTREAM_UNREACHABLE",
+                    "message": "外部サービスに接続できません。",
+                },
             ) from exc
         except httpx.HTTPStatusError as exc:
             logger.warning("Azure GPT が HTTP %d を返しました。", exc.response.status_code)

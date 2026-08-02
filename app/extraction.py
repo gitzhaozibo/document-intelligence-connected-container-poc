@@ -2,6 +2,7 @@
 
 import json
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -71,11 +72,12 @@ class FinancialSummaryExtractor:
             "source_ids は空配列にしてください。"
             'JSON形式 {"company_name":{"value":string|null,"source_ids":[string]},'
             '"securities_code":{"value":string|null,"source_ids":[string]},'
-            '"fiscal_period":{"value":string|null,"source_ids":[string]}} のみを返してください。\n\n'
+            '"fiscal_period":{"value":string|null,"source_ids":[string]}} '
+            "のみを返してください。\n\n"
             f"{document}"
         )
         endpoint = self._settings.azure_openai_endpoint.rstrip("/")
-        deployment = self._settings.azure_openai_deployment
+        deployment = quote(self._settings.azure_openai_deployment, safe="")
         url = f"{endpoint}/openai/deployments/{deployment}/chat/completions"
         timeout = httpx.Timeout(self._settings.azure_openai_timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
