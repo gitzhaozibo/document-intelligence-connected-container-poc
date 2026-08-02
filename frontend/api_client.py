@@ -53,3 +53,28 @@ class DocumentApiClient:
             return response.json()
         except ValueError as exc:
             raise ApiError("FastAPI から無効な JSON レスポンスを受信しました。") from exc
+
+    def extract_financial_summary(
+        self,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> dict[str, Any]:
+        """決算短信の項目と根拠を抽出します。"""
+        try:
+            response = httpx.post(
+                f"{self._base_url}/api/v1/financial-summary/extract",
+                files={"file": (filename, content, content_type)},
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ApiError(_error_message(exc.response)) from exc
+        except httpx.RequestError as exc:
+            raise ApiError(
+                "FastAPI に接続できません。サービスの起動状態を確認してください。"
+            ) from exc
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise ApiError("FastAPI から無効な JSON レスポンスを受信しました。") from exc

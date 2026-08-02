@@ -1,3 +1,4 @@
 # Streamlit フロントエンド
 streamlit==1.60.0
 httpx>=0.27.0,<1.0.0
+PyMuPDF==1.28.0

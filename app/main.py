@@ -33,9 +33,11 @@ from fastapi.responses import JSONResponse
 
 from app.client import DocumentIntelligenceClient, lifespan_client
 from app.config import Settings, get_settings
+from app.extraction import FinancialSummaryExtractor, build_source_regions
 from app.models import (
     ContainerHealth,
     ErrorDetail,
+    FinancialSummaryResponse,
     HealthResponse,
     HealthStatus,
     JobStatus,
@@ -566,6 +568,77 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             result=data.get("analyzeResult"),
             error=None,
         )
+
+    @app.post(
+        f"{settings.api_prefix}/financial-summary/extract",
+        response_model=FinancialSummaryResponse,
+        summary="決算短信から会社名、コード、決算期と根拠を抽出します",
+        tags=["financial-summary"],
+    )
+    async def extract_financial_summary(
+        file: Annotated[UploadFile, File(description="決算短信 PDF")],
+        di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
+        app_settings: Annotated[Settings, Depends(get_app_settings)],
+    ) -> FinancialSummaryResponse:
+        content_type = (file.content_type or "").lower().split(";")[0].strip()
+        if content_type != "application/pdf":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "PDF_REQUIRED", "message": "決算短信 PDF を指定してください。"},
+            )
+        content = await file.read()
+        if not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "EMPTY_FILE", "message": "空の PDF はアップロードできません。"},
+            )
+        if len(content) > app_settings.max_upload_size_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={"code": "FILE_TOO_LARGE", "message": "PDF がサイズ上限を超えています。"},
+            )
+
+        try:
+            operation_id = await di_client.submit_document(
+                content=content,
+                content_type=content_type,
+                options={"outputContentFormat": "text"},
+            )
+            data = await di_client.wait_for_completion(
+                operation_id=operation_id,
+                timeout_seconds=app_settings.sync_timeout_seconds,
+                poll_interval_seconds=app_settings.poll_interval_seconds,
+            )
+            regions = build_source_regions(data.get("analyzeResult") or {})
+            fields = await FinancialSummaryExtractor(app_settings).extract(regions)
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_408_REQUEST_TIMEOUT,
+                detail={"code": "APP_TIMEOUT", "message": "PDF の解析がタイムアウトしました。"},
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail={"code": "UPSTREAM_TIMEOUT", "message": "外部サービスがタイムアウトしました。"},
+            ) from exc
+        except httpx.ConnectError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"code": "UPSTREAM_UNREACHABLE", "message": "外部サービスに接続できません。"},
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Azure GPT が HTTP %d を返しました。", exc.response.status_code)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"code": "GPT_ERROR", "message": "Azure GPT による抽出に失敗しました。"},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"code": "EXTRACTION_FAILED", "message": str(exc)},
+            ) from exc
+
+        return FinancialSummaryResponse(fields=fields)
 
     return app
 

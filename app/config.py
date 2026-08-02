@@ -7,7 +7,7 @@ pydantic-settings を使用して型安全な設定管理を行います。
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,6 +46,19 @@ class Settings(BaseSettings):
     di_model_id: str = Field(
         default="prebuilt-read",
         description="使用するモデル ID",
+    )
+
+    # ---- Azure OpenAI（決算短信の項目抽出）----
+    azure_openai_endpoint: str = Field(default="", description="Azure OpenAI エンドポイント")
+    azure_openai_api_key: SecretStr = Field(
+        default=SecretStr(""), description="Azure OpenAI API キー"
+    )
+    azure_openai_deployment: str = Field(default="", description="GPT デプロイ名")
+    azure_openai_api_version: str = Field(
+        default="2024-10-21", description="Azure OpenAI API バージョン"
+    )
+    azure_openai_timeout_seconds: float = Field(
+        default=60.0, ge=1.0, description="Azure OpenAI リクエストタイムアウト（秒）"
     )
 
     # ---- FastAPI 設定 ----
@@ -95,7 +108,7 @@ class Settings(BaseSettings):
         description="HTTPX 接続プールタイムアウト（秒）",
     )
 
-    @field_validator("di_container_endpoint")
+    @field_validator("di_container_endpoint", "azure_openai_endpoint")
     @classmethod
     def validate_endpoint_url(cls, v: str) -> str:
         """エンドポイント URL の末尾スラッシュを除去します。"""
