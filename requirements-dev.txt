@@ -1,5 +1,6 @@
 # 開発・テスト依存関係
 -r requirements.txt
+-r requirements-frontend.txt
 
 # テスト
 pytest>=8.3.0,<9.0.0

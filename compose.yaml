@@ -104,6 +104,31 @@ services:
     networks:
       - di-network
 
+  # ------------------------------------------------------------------
+  # Streamlit フロントエンド
+  # ------------------------------------------------------------------
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: di-streamlit
+    environment:
+      FASTAPI_BASE_URL: http://fastapi:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    restart: on-failure
+    networks:
+      - di-network
+
 networks:
   di-network:
     driver: bridge
