@@ -30,7 +30,7 @@ def test_frontend_client_uploads_file_and_options() -> None:
 
     assert result["status"] == "succeeded"
     body = route.calls[0].request.content
-    assert b'sample.pdf' in body
+    assert b"sample.pdf" in body
     assert b'name="pages"' in body
     assert b"1-2" in body
     assert b'name="features"' in body

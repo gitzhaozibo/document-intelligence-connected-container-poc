@@ -45,7 +45,9 @@ class DocumentApiClient:
         except httpx.HTTPStatusError as exc:
             raise ApiError(_error_message(exc.response)) from exc
         except httpx.RequestError as exc:
-            raise ApiError("FastAPI に接続できません。サービスの起動状態を確認してください。") from exc
+            raise ApiError(
+                "FastAPI に接続できません。サービスの起動状態を確認してください。"
+            ) from exc
 
         try:
             return response.json()

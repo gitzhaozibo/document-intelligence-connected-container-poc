@@ -14,8 +14,9 @@ Azure Document Intelligence Read Connected Container への
 import asyncio
 import logging
 import re
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, AsyncGenerator
+from typing import Annotated, Any
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
@@ -85,7 +86,8 @@ def build_analyze_options(
             raise ValueError("ロケールは ja-JP のような形式で入力してください。")
         options["locale"] = normalized_locale
 
-    normalized_features = [value.strip() for value in (features or "").split(",") if value.strip()]
+    feature_values = (features or "").split(",")
+    normalized_features = [value.strip() for value in feature_values if value.strip()]
     invalid_features = sorted(set(normalized_features) - ALLOWED_FEATURES)
     if invalid_features:
         raise ValueError(f"サポートされていない機能です: {', '.join(invalid_features)}")
@@ -102,7 +104,9 @@ def get_analyze_options(
     pages: Annotated[str | None, Form(description="処理対象ページ（例: 1-3,5）")] = None,
     locale: Annotated[str | None, Form(description="ドキュメントのロケール（例: ja-JP）")] = None,
     features: Annotated[str | None, Form(description="追加機能（カンマ区切り）")] = None,
-    output_content_format: Annotated[str, Form(description="出力形式: json または markdown")] = "json",
+    output_content_format: Annotated[
+        str, Form(description="出力形式: json または markdown")
+    ] = "json",
 ) -> dict[str, str]:
     """multipart/form-data の解析オプションを検証します。"""
     try:

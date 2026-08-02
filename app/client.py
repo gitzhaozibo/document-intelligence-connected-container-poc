@@ -7,9 +7,9 @@ httpx.AsyncClient を使用してローカルコンテナーの非同期 REST AP
 import asyncio
 import logging
 import re
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
-from collections.abc import Mapping
-from typing import AsyncGenerator, Any
+from typing import Any
 
 import httpx
 
