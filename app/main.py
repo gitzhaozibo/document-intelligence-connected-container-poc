@@ -70,8 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         if not settings.di_api_key:
             logger.warning(
-                "DI_API_KEY が設定されていません。"
-                ".env ファイルを確認してください。"
+                "DI_API_KEY が設定されていません。" ".env ファイルを確認してください。"
             )
 
         async with lifespan_client(settings) as di_client:
@@ -155,7 +154,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         },
     )
     async def submit_job(
-        file: Annotated[UploadFile, File(description="OCR 対象ファイル（PDF または画像）")],
+        file: Annotated[
+            UploadFile, File(description="OCR 対象ファイル（PDF または画像）")
+        ],
         request: Request,
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
         app_settings: Annotated[Settings, Depends(get_app_settings)],
@@ -192,7 +193,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         if len(content) > app_settings.max_upload_size_bytes:
             raise HTTPException(
-                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail={
                     "code": "FILE_TOO_LARGE",
                     "message": (
@@ -271,7 +272,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         - status が "succeeded" の場合は result に OCR 結果が含まれます。
         - status が "failed" の場合は error にエラー情報が含まれます。
         """
-        from app.client import validate_operation_id  # ローカルインポートで循環参照を避ける
+        from app.client import (
+            validate_operation_id,
+        )  # ローカルインポートで循環参照を避ける
 
         if not validate_operation_id(operation_id):
             raise HTTPException(
@@ -365,7 +368,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         },
     )
     async def submit_job_sync(
-        file: Annotated[UploadFile, File(description="OCR 対象ファイル（PDF または画像）")],
+        file: Annotated[
+            UploadFile, File(description="OCR 対象ファイル（PDF または画像）")
+        ],
         request: Request,
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
         app_settings: Annotated[Settings, Depends(get_app_settings)],
