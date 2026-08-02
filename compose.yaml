@@ -1,0 +1,104 @@
+# ===================================================================
+# Docker Compose — Azure Document Intelligence Read PoC
+#
+# 使用方法:
+#   1. cp .env.example .env
+#   2. .env に DI_BILLING_ENDPOINT と DI_API_KEY を設定
+#   3. docker compose up -d
+#
+# 必須環境変数 (.env に設定):
+#   DI_BILLING_ENDPOINT  — Azure DI リソースのエンドポイント URL
+#   DI_API_KEY           — Azure DI API キー
+#
+# オプション環境変数 (.env で上書き可能):
+#   DI_CONTAINER_IMAGE   — Read コンテナーのイメージタグ
+#
+# NOTE: コンテナーイメージのタグ、API バージョン、モデル ID は
+# Microsoft の公式ドキュメントで必ず確認してください。
+# ===================================================================
+
+services:
+
+  # ------------------------------------------------------------------
+  # Azure Document Intelligence Read Connected Container
+  #
+  # 重要: DI_CONTAINER_IMAGE のタグは Microsoft のリリースノートに
+  # 合わせて定期的に更新してください。
+  # https://learn.microsoft.com/azure/ai-services/document-intelligence/containers/install-run
+  # ------------------------------------------------------------------
+  di-read:
+    image: ${DI_CONTAINER_IMAGE:-mcr.microsoft.com/azure-cognitive-services/form-recognizer/read:latest}
+    container_name: di-read
+    environment:
+      # EULA 同意（必須）
+      Eula: accept
+      # Azure 課金エンドポイント（.env から読み込み）
+      Billing: ${DI_BILLING_ENDPOINT}
+      # Azure API キー（.env から読み込み）
+      ApiKey: ${DI_API_KEY}
+    ports:
+      # ローカルデバッグ用（Swagger など）
+      # コンテナーの Swagger URL はイメージによって異なります。
+      # 例: http://localhost:5000/formrecognizer/swagger/index.html
+      # 実際の URL は Microsoft ドキュメントで確認してください。
+      - "5000:5000"
+    # NOTE: Read コンテナーは起動・モデルロードに時間がかかります（数分）。
+    # /status エンドポイントが存在するかどうかはイメージによって異なります。
+    # ヘルスチェック URL は使用するイメージで確認してください。
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000/status || exit 1"]
+      interval: 30s
+      timeout: 15s
+      start_period: 120s
+      retries: 5
+    # PoC 設定: on-failure で再起動（意図的な停止時は再起動しない）
+    restart: on-failure
+    networks:
+      - di-network
+
+  # ------------------------------------------------------------------
+  # FastAPI アプリケーション
+  # ------------------------------------------------------------------
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: di-fastapi
+    environment:
+      # コンテナー内部ネットワーク経由でアクセス
+      DI_CONTAINER_ENDPOINT: http://di-read:5000
+      # 以下は .env から継承
+      DI_BILLING_ENDPOINT: ${DI_BILLING_ENDPOINT:-}
+      DI_API_KEY: ${DI_API_KEY:-}
+      DI_API_VERSION: ${DI_API_VERSION:-2024-11-30}
+      DI_MODEL_ID: ${DI_MODEL_ID:-prebuilt-read}
+      API_PREFIX: ${API_PREFIX:-/api/v1}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-2.0}
+      SYNC_TIMEOUT_SECONDS: ${SYNC_TIMEOUT_SECONDS:-120.0}
+      MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-52428800}
+      HTTPX_CONNECT_TIMEOUT: ${HTTPX_CONNECT_TIMEOUT:-10.0}
+      HTTPX_READ_TIMEOUT: ${HTTPX_READ_TIMEOUT:-60.0}
+      HTTPX_WRITE_TIMEOUT: ${HTTPX_WRITE_TIMEOUT:-30.0}
+      HTTPX_POOL_TIMEOUT: ${HTTPX_POOL_TIMEOUT:-10.0}
+    ports:
+      - "8000:8000"
+    depends_on:
+      di-read:
+        # NOTE: condition: service_healthy は di-read の healthcheck が
+        # 成功した後に fastapi を起動します。
+        # ただし、healthcheck が通っても OCR 処理の準備が完了している
+        # 保証はありません。/health エンドポイントで確認してください。
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    restart: on-failure
+    networks:
+      - di-network
+
+networks:
+  di-network:
+    driver: bridge

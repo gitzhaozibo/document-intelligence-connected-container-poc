@@ -1,0 +1,31 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "N",   # pep8-naming
+    "ANN", # flake8-annotations
+    "S",   # flake8-bandit (security)
+    "LOG", # flake8-logging
+]
+ignore = [
+    "ANN101",  # self の型アノテーションは不要
+    "ANN102",  # cls の型アノテーションは不要
+    "ANN401",  # Any 型は許容
+    "S101",    # assert はテストで使用
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN", "S"]
