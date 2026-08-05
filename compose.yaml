@@ -114,6 +114,9 @@ services:
       DATABASE_USER: ${POSTGRES_USER:-postgres}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       ANALYSIS_PROCESSING_VERSION: ${ANALYSIS_PROCESSING_VERSION:-financial-summary-v1}
+      TEMP_DIR: /app/temp
+    volumes:
+      - ./temp:/app/temp
     ports:
       - "8000:8000"
     depends_on:

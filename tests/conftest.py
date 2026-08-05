@@ -12,6 +12,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.artifacts import TempArtifactStore
 from app.client import DocumentIntelligenceClient
 from app.config import Settings
 from app.database import Base
@@ -20,7 +21,7 @@ from app.repository import AnalysisRepository
 
 
 @pytest.fixture
-def test_settings() -> Settings:
+def test_settings(tmp_path: Path) -> Settings:
     """テスト用設定（ダミー認証情報使用）。"""
     return Settings(
         di_billing_endpoint="https://test.cognitiveservices.azure.com/",
@@ -40,6 +41,7 @@ def test_settings() -> Settings:
         azure_openai_endpoint="https://example.openai.azure.com",
         azure_openai_api_key="test-key",
         azure_openai_deployment="gpt-test",
+        temp_dir=tmp_path / "artifacts",
     )
 
 
@@ -76,6 +78,7 @@ async def async_client(
     app.state.di_client = di_client
     app.state.settings = test_settings
     app.state.analysis_repository = AnalysisRepository(db_session_factory)
+    app.state.artifact_store = TempArtifactStore(test_settings.temp_dir)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client

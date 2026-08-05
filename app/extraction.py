@@ -50,6 +50,7 @@ class FinancialSummaryExtractor:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self.last_payload: dict[str, Any] | None = None
 
     async def extract(self, regions: list[SourceRegion]) -> list[ExtractedField]:
         if not self._settings.azure_openai_endpoint:
@@ -110,6 +111,7 @@ class FinancialSummaryExtractor:
             payload = json.loads(content)
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             raise ValueError("Azure GPT から無効な JSON レスポンスを受信しました。") from exc
+        self.last_payload = payload if isinstance(payload, dict) else {}
 
         fields: list[ExtractedField] = []
         for name, label in _FIELD_LABELS.items():
