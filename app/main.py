@@ -401,9 +401,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
 
+        artifact_dir = artifact_store.find_operation(operation_id)
         try:
             data = await di_client.get_job_result(operation_id)
         except httpx.TimeoutException:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="CONTAINER_TIMEOUT",
+                message="Read コンテナーへの接続がタイムアウトしました。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail={
@@ -412,6 +419,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
         except httpx.ConnectError:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="CONTAINER_UNREACHABLE",
+                message="Read コンテナーに接続できません。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -421,6 +434,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as exc:
             error_msg = str(exc)
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="JOB_RESULT_ERROR",
+                message=error_msg,
+            )
             if "見つかりません" in error_msg:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -437,7 +456,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
 
-        artifact_dir = artifact_store.find_operation(operation_id)
         artifact_store.write_json(
             artifact_dir,
             "document_intelligence.json",

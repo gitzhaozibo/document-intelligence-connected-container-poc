@@ -54,7 +54,20 @@ class TempArtifactStore:
         self._operations[operation_id] = directory
 
     def find_operation(self, operation_id: str) -> Path | None:
-        return self._operations.get(operation_id)
+        directory = self._operations.get(operation_id)
+        if directory is not None:
+            return directory
+        for candidate in self.root.glob("upload-*"):
+            if not candidate.is_dir():
+                continue
+            try:
+                metadata = self.read_json(candidate, "metadata.json")
+            except (OSError, json.JSONDecodeError):
+                continue
+            if metadata.get("operation_id") == operation_id:
+                self._operations[operation_id] = candidate
+                return candidate
+        return None
 
     def write_json(
         self, directory: Path | None, filename: str, payload: Any
