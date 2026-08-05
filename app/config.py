@@ -6,6 +6,7 @@ pydantic-settings を使用して型安全な設定管理を行います。
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -100,6 +101,10 @@ class Settings(BaseSettings):
         default=52_428_800,  # 50 MB
         ge=1,
         description="アップロード可能な最大ファイルサイズ（バイト）",
+    )
+    temp_dir: Path = Field(
+        default=Path("temp"),
+        description="テスト検証用のアップロード・解析成果物保存先",
     )
 
     # ---- HTTPX タイムアウト設定 ----

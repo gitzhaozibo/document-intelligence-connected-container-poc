@@ -34,6 +34,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 
+from app.artifacts import TempArtifactStore
 from app.client import DocumentIntelligenceClient, lifespan_client
 from app.config import Settings, get_settings
 from app.database import create_database
@@ -152,10 +153,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logger.warning("DI_API_KEY が設定されていません。.env ファイルを確認してください。")
 
         database_engine, session_factory = create_database(settings.get_database_url())
+        artifact_store = TempArtifactStore(settings.temp_dir)
         async with lifespan_client(settings) as di_client:
             app.state.di_client = di_client
             app.state.settings = settings
             app.state.analysis_repository = AnalysisRepository(session_factory)
+            app.state.artifact_store = artifact_store
             logger.info(
                 "アプリケーションを起動しました。prefix=%s, container=%s",
                 settings.api_prefix,
@@ -185,6 +188,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def get_analysis_repository(request: Request) -> AnalysisRepository:
         return request.app.state.analysis_repository
+
+    def get_artifact_store(request: Request) -> TempArtifactStore:
+        return request.app.state.artifact_store
 
     # ---- ヘルスチェックエンドポイント ----
 
@@ -241,6 +247,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         analyze_options: Annotated[dict[str, str], Depends(get_analyze_options)],
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
         app_settings: Annotated[Settings, Depends(get_app_settings)],
+        artifact_store: Annotated[TempArtifactStore, Depends(get_artifact_store)],
     ) -> JobSubmitResponse:
         """
         PDF または対応画像ファイルをアップロードして OCR ジョブを開始します。
@@ -284,6 +291,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
 
+        artifact_dir = artifact_store.create_upload(
+            content=content,
+            filename=file.filename or "document.pdf",
+            content_type=content_type,
+            analyze_options=analyze_options,
+        )
+
         # コンテナーへ送信
         try:
             operation_id = await di_client.submit_document(
@@ -291,7 +305,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 content_type=content_type,
                 options=analyze_options,
             )
+            artifact_store.associate_operation(artifact_dir, operation_id)
         except httpx.TimeoutException:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="CONTAINER_TIMEOUT",
+                message="Read コンテナーへの接続がタイムアウトしました。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail={
@@ -303,6 +324,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
         except httpx.ConnectError:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="CONTAINER_UNREACHABLE",
+                message="Read コンテナーに接続できません。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -314,6 +341,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
         except ValueError as exc:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="INVALID_CONTAINER_RESPONSE",
+                message=str(exc),
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -346,6 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_job_status(
         operation_id: str,
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
+        artifact_store: Annotated[TempArtifactStore, Depends(get_artifact_store)],
     ) -> JobStatusResponse:
         """
         OCR ジョブのステータスを確認します。
@@ -403,6 +437,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
 
+        artifact_dir = artifact_store.find_operation(operation_id)
+        artifact_store.write_json(
+            artifact_dir,
+            "document_intelligence.json",
+            data,
+        )
         raw_status = data.get("status", "")
         try:
             job_status = JobStatus(raw_status)
@@ -418,12 +458,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         elif job_status == JobStatus.FAILED:
             error = data.get("error")
 
-        return JobStatusResponse(
+        response = JobStatusResponse(
             job_id=operation_id,
             status=job_status,
             result=result,
             error=error,
         )
+        artifact_store.write_json(
+            artifact_dir,
+            "final_response.json",
+            response.model_dump(mode="json"),
+        )
+        if job_status == JobStatus.FAILED:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code=str((error or {}).get("code") or "OCR_JOB_FAILED"),
+                message=str((error or {}).get("message") or "OCR ジョブが失敗しました。"),
+            )
+        return response
 
     # ---- PoC 専用: 同期待機エンドポイント ----
 
@@ -455,6 +508,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         analyze_options: Annotated[dict[str, str], Depends(get_analyze_options)],
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
         app_settings: Annotated[Settings, Depends(get_app_settings)],
+        artifact_store: Annotated[TempArtifactStore, Depends(get_artifact_store)],
     ) -> JobStatusResponse:
         """
         PoC 専用: OCR 完了まで同期的に待機します。
@@ -496,6 +550,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
 
+        artifact_dir = artifact_store.create_upload(
+            content=content,
+            filename=file.filename or "document.pdf",
+            content_type=content_type,
+            analyze_options=analyze_options,
+        )
+
         # ジョブ送信
         try:
             operation_id = await di_client.submit_document(
@@ -503,7 +564,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 content_type=content_type,
                 options=analyze_options,
             )
+            artifact_store.associate_operation(artifact_dir, operation_id)
         except httpx.TimeoutException:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="CONTAINER_TIMEOUT",
+                message="Read コンテナーへの接続がタイムアウトしました。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail={
@@ -512,6 +580,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
         except httpx.ConnectError:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="CONTAINER_UNREACHABLE",
+                message="Read コンテナーに接続できません。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -520,6 +594,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
         except ValueError as exc:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="INVALID_CONTAINER_RESPONSE",
+                message=str(exc),
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -535,7 +615,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 timeout_seconds=app_settings.sync_timeout_seconds,
                 poll_interval_seconds=app_settings.poll_interval_seconds,
             )
+            artifact_store.write_json(
+                artifact_dir,
+                "document_intelligence.json",
+                data,
+            )
         except TimeoutError:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="APP_TIMEOUT",
+                message="OCR 完了待機がタイムアウトしました。",
+            )
             raise HTTPException(
                 status_code=status.HTTP_408_REQUEST_TIMEOUT,
                 detail={
@@ -549,6 +640,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
         except ValueError as exc:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="OCR_JOB_FAILED",
+                message=str(exc),
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -557,12 +654,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
 
-        return JobStatusResponse(
+        response = JobStatusResponse(
             job_id=operation_id,
             status=JobStatus.SUCCEEDED,
             result=data.get("analyzeResult"),
             error=None,
         )
+        artifact_store.write_json(
+            artifact_dir,
+            "final_response.json",
+            response.model_dump(mode="json"),
+        )
+        return response
 
     @app.post(
         f"{settings.api_prefix}/financial-summary/extract",
@@ -575,6 +678,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         di_client: Annotated[DocumentIntelligenceClient, Depends(get_di_client)],
         app_settings: Annotated[Settings, Depends(get_app_settings)],
         repository: Annotated[AnalysisRepository, Depends(get_analysis_repository)],
+        artifact_store: Annotated[TempArtifactStore, Depends(get_artifact_store)],
     ) -> FinancialSummaryResponse:
         content_type = (file.content_type or "").lower().split(";")[0].strip()
         if content_type != "application/pdf":
@@ -594,6 +698,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail={"code": "FILE_TOO_LARGE", "message": "PDF がサイズ上限を超えています。"},
             )
 
+        artifact_dir = artifact_store.create_upload(
+            content=content,
+            filename=file.filename or "document.pdf",
+            content_type=content_type,
+            analyze_options={"outputContentFormat": "text"},
+        )
         db_started = perf_counter()
         document = await repository.get_or_create_document(
             digest=sha256(content).hexdigest(),
@@ -644,11 +754,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     cache_hit=True,
                     db_ms=db_ms,
                 )
-                return FinancialSummaryResponse(
+                response = FinancialSummaryResponse(
                     document_id=str(document.id),
                     cache_hit=True,
                     fields=analysis.extracted_fields or [],
                 )
+                artifact_store.write_json(
+                    artifact_dir,
+                    "document_intelligence.json",
+                    {"status": "succeeded", "analyzeResult": analysis.ocr_result or {}},
+                )
+                cached_regions = build_source_regions(analysis.ocr_result or {})
+                artifact_store.write_json(
+                    artifact_dir,
+                    "source_regions.json",
+                    [region.model_dump(mode="json") for region in cached_regions],
+                )
+                artifact_store.write_json(
+                    artifact_dir,
+                    "gpt_result.json",
+                    {"fields": analysis.extracted_fields or [], "cache_hit": True},
+                )
+                artifact_store.write_json(
+                    artifact_dir,
+                    "final_response.json",
+                    response.model_dump(mode="json"),
+                )
+                return response
             await repository.finish_trace(
                 trace.id,
                 status="failed",
@@ -673,16 +805,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 content_type=content_type,
                 options={"outputContentFormat": "text"},
             )
+            artifact_store.associate_operation(artifact_dir, operation_id)
             data = await di_client.wait_for_completion(
                 operation_id=operation_id,
                 timeout_seconds=app_settings.sync_timeout_seconds,
                 poll_interval_seconds=app_settings.poll_interval_seconds,
             )
+            artifact_store.write_json(
+                artifact_dir,
+                "document_intelligence.json",
+                data,
+            )
             ocr_ms = (perf_counter() - ocr_started) * 1000
             ocr_result = data.get("analyzeResult") or {}
             regions = build_source_regions(ocr_result)
+            artifact_store.write_json(
+                artifact_dir,
+                "source_regions.json",
+                [region.model_dump(mode="json") for region in regions],
+            )
             extraction_started = perf_counter()
-            fields = await FinancialSummaryExtractor(app_settings).extract(regions)
+            extractor = FinancialSummaryExtractor(app_settings)
+            fields = await extractor.extract(regions)
+            artifact_store.write_json(
+                artifact_dir,
+                "gpt_result.json",
+                extractor.last_payload
+                if extractor.last_payload is not None
+                else {"fields": [field.model_dump(mode="json") for field in fields]},
+            )
             extraction_ms = (perf_counter() - extraction_started) * 1000
             db_started = perf_counter()
             await repository.complete_analysis(
@@ -692,6 +843,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             db_ms += (perf_counter() - db_started) * 1000
         except TimeoutError as exc:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="document_intelligence",
+                code="APP_TIMEOUT",
+                message="PDF の解析がタイムアウトしました。",
+            )
             await repository.fail_analysis(analysis.id)
             await repository.finish_trace(
                 trace.id,
@@ -709,6 +866,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail={"code": "APP_TIMEOUT", "message": "PDF の解析がタイムアウトしました。"},
             ) from exc
         except httpx.TimeoutException as exc:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="upstream",
+                code="UPSTREAM_TIMEOUT",
+                message="外部サービスがタイムアウトしました。",
+            )
             await repository.fail_analysis(analysis.id)
             await repository.finish_trace(
                 trace.id,
@@ -729,6 +892,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             ) from exc
         except httpx.ConnectError as exc:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="upstream",
+                code="UPSTREAM_UNREACHABLE",
+                message="外部サービスに接続できません。",
+            )
             await repository.fail_analysis(analysis.id)
             await repository.finish_trace(
                 trace.id,
@@ -749,6 +918,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             ) from exc
         except httpx.HTTPStatusError as exc:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="gpt",
+                code="GPT_ERROR",
+                message=f"Azure GPT が HTTP {exc.response.status_code} を返しました。",
+            )
             logger.warning("Azure GPT が HTTP %d を返しました。", exc.response.status_code)
             await repository.fail_analysis(analysis.id)
             await repository.finish_trace(
@@ -767,6 +942,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail={"code": "GPT_ERROR", "message": "Azure GPT による抽出に失敗しました。"},
             ) from exc
         except ValueError as exc:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="extraction",
+                code="EXTRACTION_FAILED",
+                message=str(exc),
+            )
             await repository.fail_analysis(analysis.id)
             await repository.finish_trace(
                 trace.id,
@@ -784,6 +965,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail={"code": "EXTRACTION_FAILED", "message": str(exc)},
             ) from exc
         except Exception as exc:
+            artifact_store.write_error(
+                artifact_dir,
+                stage="persistence",
+                code="INTERNAL_ERROR",
+                message="解析結果の保存に失敗しました。",
+            )
             logger.exception("決算短信の解析結果保存に失敗しました。")
             await repository.fail_analysis(analysis.id)
             await repository.finish_trace(
@@ -814,9 +1001,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             extraction_ms=extraction_ms,
             db_ms=db_ms,
         )
-        return FinancialSummaryResponse(
+        response = FinancialSummaryResponse(
             document_id=str(document.id), cache_hit=False, fields=fields
         )
+        artifact_store.write_json(
+            artifact_dir,
+            "final_response.json",
+            response.model_dump(mode="json"),
+        )
+        return response
 
     @app.get(
         f"{settings.api_prefix}/financial-summary/{{document_id}}/excel",
