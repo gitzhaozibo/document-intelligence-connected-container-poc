@@ -8,8 +8,15 @@ markers = [
 ]
 
 [tool.ruff]
-line-length = 100
+line-length = 150
 target-version = "py312"
+
+[tool.black]
+line-length = 150
+
+[tool.isort]
+profile = "black"
+line_length = 150
 
 [tool.ruff.lint]
 select = [

@@ -8,6 +8,7 @@ import httpx
 
 from app.config import Settings
 from app.models import ExtractedField, SourceRegion
+from shared.document_evidence import DocumentEvidence
 
 _FIELD_LABELS = {
     "company_name": "会社名",
@@ -18,31 +19,8 @@ _FIELD_LABELS = {
 
 def build_source_regions(analyze_result: dict[str, Any]) -> list[SourceRegion]:
     """Document Intelligence の行情報を GPT と画面表示に使える形へ変換します。"""
-    regions: list[SourceRegion] = []
-    for page in analyze_result.get("pages") or []:
-        width = float(page.get("width") or 0)
-        height = float(page.get("height") or 0)
-        if width <= 0 or height <= 0:
-            continue
-        page_number = int(page.get("pageNumber") or len(regions) + 1)
-        for line in page.get("lines") or []:
-            text = str(line.get("content") or "").strip()
-            polygon = line.get("polygon") or []
-            if not text or len(polygon) != 8:
-                continue
-            normalized = [
-                float(value) / (width if index % 2 == 0 else height)
-                for index, value in enumerate(polygon)
-            ]
-            regions.append(
-                SourceRegion(
-                    source_id=f"L{len(regions) + 1}",
-                    page_number=page_number,
-                    text=text,
-                    polygon=normalized,
-                )
-            )
-    return regions
+    evidence = DocumentEvidence.from_analyze_result(analyze_result)
+    return [SourceRegion(**region.to_dict()) for region in evidence.regions]
 
 
 class FinancialSummaryExtractor:
@@ -62,11 +40,8 @@ class FinancialSummaryExtractor:
         if not regions:
             raise ValueError("OCR 結果に位置情報付きのテキストがありません。")
 
-        source_by_id = {region.source_id: region for region in regions}
-        document = "\n".join(
-            f"{region.source_id} [page {region.page_number}] {region.text}"
-            for region in regions
-        )
+        evidence = DocumentEvidence(regions)
+        document = evidence.to_prompt_text()
         prompt = (
             "次の決算短信から会社名、証券コード、決算期を抽出してください。"
             "推測せず、根拠となる行IDを必ず指定してください。見つからない値は null、"
@@ -117,13 +92,7 @@ class FinancialSummaryExtractor:
         for name, label in _FIELD_LABELS.items():
             item = payload.get(name) if isinstance(payload, dict) else None
             item = item if isinstance(item, dict) else {}
-            source_ids = item.get("source_ids")
-            valid_ids = source_ids if isinstance(source_ids, list) else []
-            sources = [
-                source_by_id[source_id]
-                for source_id in valid_ids
-                if isinstance(source_id, str) and source_id in source_by_id
-            ]
+            sources = evidence.resolve_source_ids(item.get("source_ids"))
             value = item.get("value")
             fields.append(
                 ExtractedField(

@@ -8,6 +8,7 @@ import fitz
 import streamlit as st
 
 from frontend.api_client import ApiError, DocumentApiClient
+from shared.document_evidence import DocumentEvidence
 
 ACCEPTED_FILE_TYPES = ["pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "heif"]
 
@@ -16,28 +17,7 @@ def _render_pdf_page(
     content: bytes, page_number: int, sources: list[dict[str, Any]]
 ) -> bytes:
     """指定ページを根拠領域付きの PNG に変換します。"""
-    with fitz.open(stream=content, filetype="pdf") as document:
-        page = document[page_number - 1]
-        for source in sources:
-            if source.get("page_number") != page_number:
-                continue
-            polygon = source.get("polygon") or []
-            if len(polygon) != 8:
-                continue
-            xs = polygon[0::2]
-            ys = polygon[1::2]
-            rect = fitz.Rect(
-                min(xs) * page.rect.width,
-                min(ys) * page.rect.height,
-                max(xs) * page.rect.width,
-                max(ys) * page.rect.height,
-            )
-            annotation = page.add_rect_annot(rect)
-            annotation.set_colors(stroke=(1, 0.55, 0), fill=(1, 0.85, 0))
-            annotation.set_opacity(0.35)
-            annotation.update()
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-        return pixmap.tobytes("png")
+    return DocumentEvidence.render_pdf_page(content, page_number, sources)
 
 
 def _display_financial_summary(result: dict[str, Any], pdf_content: bytes) -> None:
@@ -160,6 +140,7 @@ def run_app() -> None:
         ):
             _display_financial_summary(
                 summary_result,
+                pdf_content,
             )
             document_id = summary_result.get("document_id")
             if document_id and st.button("Excelを作成"):
