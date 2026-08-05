@@ -802,3 +802,14 @@ docker compose exec postgres pg_restore -U postgres -d document_app --clean --if
 
 PDF と OCR 全文を保存するため、本番利用前にアクセス制御、保存期間、削除、暗号化、
 バックアップ保護の方針を定めてください。通常のアプリログには PDF・OCR 本文を出力しません。
+
+## テスト検証用の一時成果物
+
+受理した PDF ごとに、`TEMP_DIR`（既定値 `temp`）の下へ一意なフォルダを作成し、
+アップロード PDF、メタデータ、Document Intelligence の完全な応答、GPT 入出力に
+相当するデータ、最終レスポンス、失敗時のエラーを保存します。Docker Compose では
+ホストの `./temp` が FastAPI コンテナーの `/app/temp` に割り当てられます。
+
+これらのファイルには文書本文や抽出情報が含まれます。テスト専用としてアクセスを制限し、
+不要になったらアプリケーション停止後に `temp` フォルダの中身を手動で削除してください。
+`temp/` は Git の追跡対象外です。

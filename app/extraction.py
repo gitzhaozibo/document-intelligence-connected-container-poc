@@ -50,6 +50,7 @@ class FinancialSummaryExtractor:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self.last_payload: dict[str, Any] | None = None
 
     async def extract(self, regions: list[SourceRegion]) -> list[ExtractedField]:
         if not self._settings.azure_openai_endpoint:
