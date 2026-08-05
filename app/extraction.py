@@ -99,7 +99,6 @@ class FinancialSummaryExtractor:
                         },
                         {"role": "user", "content": prompt},
                     ],
-                    "temperature": 0,
                     "response_format": {"type": "json_object"},
                 },
             )
@@ -109,7 +108,9 @@ class FinancialSummaryExtractor:
             content = response.json()["choices"][0]["message"]["content"]
             payload = json.loads(content)
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise ValueError("Azure GPT から無効な JSON レスポンスを受信しました。") from exc
+            raise ValueError(
+                "Azure GPT から無効な JSON レスポンスを受信しました。"
+            ) from exc
 
         fields: list[ExtractedField] = []
         for name, label in _FIELD_LABELS.items():

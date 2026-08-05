@@ -12,7 +12,9 @@ from frontend.api_client import ApiError, DocumentApiClient
 ACCEPTED_FILE_TYPES = ["pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "heif"]
 
 
-def _render_pdf_page(content: bytes, page_number: int, sources: list[dict[str, Any]]) -> bytes:
+def _render_pdf_page(
+    content: bytes, page_number: int, sources: list[dict[str, Any]]
+) -> bytes:
     """指定ページを根拠領域付きの PNG に変換します。"""
     with fitz.open(stream=content, filetype="pdf") as document:
         page = document[page_number - 1]
@@ -61,7 +63,9 @@ def _display_financial_summary(result: dict[str, Any], pdf_content: bytes) -> No
         hide_index=True,
     )
 
-    field_options = {field.get("label", field.get("name", "")): field for field in fields}
+    field_options = {
+        field.get("label", field.get("name", "")): field for field in fields
+    }
     selected_label = st.selectbox("PDF 上で確認する項目", options=list(field_options))
     selected = field_options[selected_label]
     sources = selected.get("sources") or []
@@ -91,9 +95,13 @@ def _display_result(result: dict[str, Any]) -> None:
 
 def run_app() -> None:
     """Streamlit アプリケーションを描画します。"""
-    st.set_page_config(page_title="Document Intelligence PoC", page_icon="📄", layout="wide")
+    st.set_page_config(
+        page_title="Document Intelligence PoC", page_icon="📄", layout="wide"
+    )
     st.title("Document Intelligence Connected Container PoC")
-    st.write("PDF または画像をアップロードし、FastAPI 経由でローカル OCR を実行します。")
+    st.write(
+        "PDF または画像をアップロードし、FastAPI 経由でローカル OCR を実行します。"
+    )
 
     uploaded_file = st.file_uploader(
         "解析するファイル",
@@ -122,12 +130,16 @@ def run_app() -> None:
                 use_container_width=True,
             )
         except (fitz.FileDataError, ValueError):
-            st.error("PDF を表示できません。ファイルが破損していないか確認してください。")
+            st.error(
+                "PDF を表示できません。ファイルが破損していないか確認してください。"
+            )
 
         if st.button("決算短信の情報を抽出", type="primary"):
             api_url = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
             client = DocumentApiClient(api_url)
-            with st.spinner("OCR と Azure GPT で会社名・コード・決算期を抽出しています..."):
+            with st.spinner(
+                "OCR と Azure GPT で会社名・コード・決算期を抽出しています..."
+            ):
                 try:
                     summary = client.extract_financial_summary(
                         filename=uploaded_file.name,
@@ -142,15 +154,20 @@ def run_app() -> None:
                     st.session_state.pop("summary_excel", None)
 
         summary_result = st.session_state.get("summary_result")
-        if summary_result and st.session_state.get("summary_document_id") == document_id:
-            _display_financial_summary(summary_result, pdf_content)
+        if (
+            summary_result
+            and st.session_state.get("summary_document_id") == document_id
+        ):
+            _display_financial_summary(
+                summary_result,
+            )
             document_id = summary_result.get("document_id")
             if document_id and st.button("Excelを作成"):
                 api_url = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
                 client = DocumentApiClient(api_url)
                 try:
-                    st.session_state["summary_excel"] = client.download_financial_summary_excel(
-                        str(document_id)
+                    st.session_state["summary_excel"] = (
+                        client.download_financial_summary_excel(str(document_id))
                     )
                 except ApiError as exc:
                     st.error(str(exc))
@@ -160,16 +177,24 @@ def run_app() -> None:
                     "Excelをダウンロード",
                     data=excel_content,
                     file_name="financial-summary.xlsx",
-                    mime=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                    mime=(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    ),
                 )
 
     with st.expander("ページ・解析オプション", expanded=True):
-        pages = st.text_input("対象ページ", placeholder="例: 1-3,5", help="空欄の場合は全ページ")
+        pages = st.text_input(
+            "対象ページ", placeholder="例: 1-3,5", help="空欄の場合は全ページ"
+        )
         locale = st.text_input("言語ロケール", placeholder="例: ja-JP")
         output_format = st.selectbox("本文形式", options=["text", "markdown"])
-        high_resolution = st.checkbox("高解像度 OCR", help="ocrHighResolution 機能を有効にします")
+        high_resolution = st.checkbox(
+            "高解像度 OCR", help="ocrHighResolution 機能を有効にします"
+        )
         detect_languages = st.checkbox("言語検出", help="languages 機能を有効にします")
-        detect_barcodes = st.checkbox("バーコード検出", help="barcodes 機能を有効にします")
+        detect_barcodes = st.checkbox(
+            "バーコード検出", help="barcodes 機能を有効にします"
+        )
 
     if st.button("実行", type="primary", disabled=uploaded_file is None):
         features = [

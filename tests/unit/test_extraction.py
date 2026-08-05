@@ -1,5 +1,7 @@
 """決算短信の項目抽出ロジックの単体テスト。"""
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -77,6 +79,8 @@ async def test_extractor_returns_only_grounded_sources() -> None:
         fields = await FinancialSummaryExtractor(settings).extract(regions)
 
     assert route.called
+    request_payload = json.loads(route.calls[0].request.content)
+    assert "temperature" not in request_payload
     assert fields[0].value == "株式会社サンプル"
     assert fields[0].sources[0].source_id == "L1"
     assert fields[1].value == "1234"
